@@ -1,0 +1,4 @@
+include versioneer.py
+include pygv/_version.py
+include pygv/__init__.py
+include pygv/data/*
