@@ -21,7 +21,7 @@ visualizations seamlessly integrated into their daily workflows.
   without being overwhelmed by unnecessary details.
 * **Rich Genomic Data Support**: PyGV offers support for a wide range of genomic data formats, allowing you to
   visualize genes, regulatory elements, sequencing alignments, genomic interactions, and other genomics features in the
-  way that best serves your research. See a gallery of all supported tracks [here]().
+  way that best serves your research. See a gallery of all supported tracks [here](https://pygv.readthedocs.io/en/latest/tracks.html).
 * **High-resolution Figures**: PyGV is committed to producing high-quality figures. Our goal is to minimize the
   additional effort you might otherwise spend adjusting fonts, colors, and other details in software like Adobe
   Illustrator. With PyGV, you can create polished, high-quality figures directly from your genomic visualizations,
