@@ -15,6 +15,6 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=["pygv", "pygv.errors", "pygv.scalers", "pygv.tracks", "pygv.tracks.logomaker"],
-    url="pygv.yaobio.com",
+    url="www.yaobio.com",
     license="GPL",
 )
