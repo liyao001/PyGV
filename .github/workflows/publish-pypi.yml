@@ -17,6 +17,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
+
+      # Annotated tags are not always fully present until this fetch; versioneer needs them.
+      - name: Fetch tags for versioneer
+        run: git fetch --tags --force
+
+      - name: Extract data from tag (subject for release builds)
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          subject=$(git for-each-ref "${GITHUB_REF}" --format='%(contents:subject)')
+          {
+            echo "subject<<EOF"
+            echo "${subject}"
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - uses: actions/setup-python@v5
         with:
