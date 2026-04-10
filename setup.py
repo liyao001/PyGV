@@ -10,11 +10,11 @@ setup(
     version=versioneer.get_version(),
     cmdclass=versioneer.get_cmdclass(),
     author="Li Yao",
-    author_email="li@yaobio.com",
+    author_email="regulatorygenome@gmail.com",
     description="Python Genome Viewer",
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=["pygv", "pygv.errors", "pygv.scalers", "pygv.tracks", "pygv.tracks.logomaker"],
-    url="www.yaobio.com",
+    url="https://github.com/liyao001/PyGV",
     license="GPL",
 )
