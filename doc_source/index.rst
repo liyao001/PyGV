@@ -26,7 +26,7 @@ Get Started
 
 .. code-block:: shell
 
-   pip install pygv
+   pip install GenomeViewer
 
 
 Indices and tables
