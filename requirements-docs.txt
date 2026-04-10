@@ -1,0 +1,7 @@
+# Documentation build (Sphinx, Read the Docs, docs CI)
+-r requirements.txt
+# Newer seaborn required for matplotlib 3.9+ (register_cmap removal)
+seaborn>=0.13.2
+sphinx>=5,<8
+pydata-sphinx-theme
+sphinx-gallery

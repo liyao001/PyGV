@@ -12,7 +12,9 @@
 #
 import os
 import sys
-sys.path.insert(0, os.path.join(os.path.split(os.path.abspath('.'))[0], "pygv"))
+
+_repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, _repo_root)
 
 
 # -- Project information -----------------------------------------------------
