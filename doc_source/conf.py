@@ -12,15 +12,18 @@
 #
 import os
 import sys
+from datetime import date
 
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _repo_root)
 
+# First publication year for the docs; end year updates on each build (CI, RTD, local).
+_COPYRIGHT_START_YEAR = 2021
 
 # -- Project information -----------------------------------------------------
 
 project = 'PyGV'
-copyright = '2021-2024, Li Yao'
+copyright = f"{_COPYRIGHT_START_YEAR}-{date.today().year}, Li Yao"
 author = 'Li Yao'
 
 # -- General configuration ---------------------------------------------------
