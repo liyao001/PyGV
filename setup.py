@@ -14,7 +14,7 @@ setup(
     description="Python Genome Viewer",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=["pygv", "pygv.errors", "pygv.scalers", "pygv.tracks", "pygv.tracks.logomaker"],
+    packages=["pygv", "pygv.configs", "pygv.errors", "pygv.scalers", "pygv.tracks", "pygv.tracks.logomaker"],
     url="https://github.com/liyao001/PyGV",
     license="GPL",
 )

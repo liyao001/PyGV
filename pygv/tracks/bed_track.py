@@ -159,7 +159,7 @@ class BedTrack(AnnotationTrack):
                     self.plot_thickness = kwargs.pop("plot_thickness")
             if n_fields == 12:
                 self._plot_block = 1
-        self._rgb_check = re.compile("(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})")
+        self._rgb_check = re.compile(r"(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})")
         self.small_relative = 0
         self._block_line_width = 0
         self.block_line_height = kwargs.pop("block_line_height", 1)
@@ -687,6 +687,16 @@ class BedPETrack(AnnotationTrack):
             Show feature names. See :attr:`~pygv.tracks.track.AnnotationTrack.show_name`
         flip : bool
             Flip the arcs vertically
+        highlight_links : list or tuple
+            Links to highlight. Each item can be either a BEDPE `name` string or
+            a coordinate tuple/list of
+            `(chromosome, start1, end1, start2, end2)`.
+        highlight_link_color : color_like
+            Color used for highlighted links.
+        highlight_link_alpha : float
+            Alpha used for highlighted links.
+        highlight_link_line_width : float
+            Line width used for highlighted links.
         More kwargs can be seen here: :class:`~pygv.tracks.track.AnnotationTrack`
 
     Examples
@@ -777,6 +787,95 @@ class BedPETrack(AnnotationTrack):
             self.edge_color = "#6E6E6E"
 
         self.flip_arc = kwargs.get("flip", False)
+        self._highlight_links = set()
+        self._highlight_link_color = kwargs.get("highlight_link_color", "#D62728")
+        self._highlight_link_alpha = kwargs.get("highlight_link_alpha", 1.0)
+        self._highlight_link_line_width = kwargs.get(
+            "highlight_link_line_width", self.line_width * 1.5
+        )
+        self.set_highlight_links(kwargs.get("highlight_links", ()))
+
+    @staticmethod
+    def _normalize_link_coords(start1, end1, start2, end2, chromosome=None):
+        first_anchor = (int(start1), int(end1))
+        second_anchor = (int(start2), int(end2))
+        left_anchor, right_anchor = sorted((first_anchor, second_anchor))
+        normalized_chromosome = None if chromosome is None else str(chromosome)
+        return (
+            "coords",
+            normalized_chromosome,
+            left_anchor[0],
+            left_anchor[1],
+            right_anchor[0],
+            right_anchor[1],
+        )
+
+    def _normalize_highlight_link(self, link):
+        if isinstance(link, str):
+            return ("name", str(link))
+        if isinstance(link, (tuple, list)) and len(link) == 5:
+            chromosome, start1, end1, start2, end2 = link
+            try:
+                return self._normalize_link_coords(
+                    start1, end1, start2, end2, chromosome=chromosome
+                )
+            except (TypeError, ValueError):
+                return None
+        if isinstance(link, (tuple, list)) and len(link) == 4:
+            try:
+                return self._normalize_link_coords(*link)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def set_highlight_links(self, links):
+        """
+        Set highlighted links for this BEDPE track.
+
+        Parameters
+        ----------
+        links : str or iterable
+            A BEDPE `name`, or an iterable of names and/or coordinate tuples
+            `(chromosome, start1, end1, start2, end2)`.
+        """
+        if links is None:
+            self._highlight_links = set()
+            return
+
+        if isinstance(links, str):
+            links = (links,)
+
+        normalized_links = set()
+        for link in links:
+            normalized = self._normalize_highlight_link(link)
+            if normalized is not None:
+                normalized_links.add(normalized)
+        self._highlight_links = normalized_links
+
+    def add_highlight_link(self, link):
+        """
+        Add one highlighted link by BEDPE name or anchor coordinates.
+        """
+        normalized = self._normalize_highlight_link(link)
+        if normalized is not None:
+            self._highlight_links.add(normalized)
+
+    def clear_highlight_links(self):
+        """
+        Remove all highlighted links.
+        """
+        self._highlight_links = set()
+
+    def _is_highlight_link(self, chromosome, name, start1, end1, start2, end2):
+        if len(self._highlight_links) == 0:
+            return False
+        if name is not None and ("name", str(name)) in self._highlight_links:
+            return True
+        return self._normalize_link_coords(
+            start1, end1, start2, end2, chromosome=chromosome
+        ) in self._highlight_links or self._normalize_link_coords(
+            start1, end1, start2, end2
+        ) in self._highlight_links
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
         """
@@ -814,6 +913,7 @@ class BedPETrack(AnnotationTrack):
                     int(interval.end1),
                     int(interval.start2),
                     int(interval.end2),
+                    getattr(interval, "name", None),
                 )
             )
 
@@ -848,18 +948,41 @@ class BedPETrack(AnnotationTrack):
 
         self._small_relative = 0.004 * (end - start)
         for pair in self._lane_registries[0]:
-            a1_start_loc, a1_end_loc, a2_start_loc, a2_end_loc = pair
+            if len(pair) >= 5:
+                a1_start_loc, a1_end_loc, a2_start_loc, a2_end_loc, pair_name = pair
+            else:
+                a1_start_loc, a1_end_loc, a2_start_loc, a2_end_loc = pair
+                pair_name = None
+
+            is_highlight = self._is_highlight_link(
+                chromosome,
+                pair_name,
+                a1_start_loc,
+                a1_end_loc,
+                a2_start_loc,
+                a2_end_loc,
+            )
+            plot_color = self._highlight_link_color if is_highlight else self.color
+            plot_alpha = self._highlight_link_alpha if is_highlight else self.alpha
+            plot_line_width = (
+                self._highlight_link_line_width if is_highlight else self.line_width
+            )
             a2_mid = (a2_end_loc + a2_start_loc) / 2
             a1_mid = (a1_end_loc + a1_start_loc) / 2
             self._ax.plot(
                 (a1_start_loc, a1_end_loc),
                 (0, 0),
-                color=self.color,
-                lw=self.line_width,
+                color=plot_color,
+                lw=plot_line_width,
+                alpha=plot_alpha,
                 clip_on=False,
             )
             self._ax.plot(
-                (a2_start_loc, a2_end_loc), (0, 0), color=self.color, lw=self.line_width
+                (a2_start_loc, a2_end_loc),
+                (0, 0),
+                color=plot_color,
+                lw=plot_line_width,
+                alpha=plot_alpha,
             )
             if a1_start_loc < a2_start_loc:
                 arc_length = a2_mid - a1_mid
@@ -872,8 +995,9 @@ class BedPETrack(AnnotationTrack):
                 arc_length,
                 arc_length / 2,
                 theta2=180,
-                color=self.color,
-                alpha=self.alpha,
+                color=plot_color,
+                alpha=plot_alpha,
+                linewidth=plot_line_width,
             )
             ax.add_patch(arc)
 
