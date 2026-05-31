@@ -202,7 +202,7 @@ class GenomeViewer(object):
         self, start_track_name: str, end_track_name: str, label: str, x=0.02, x_line_offset=0.015
     ):
         """
-        Add group autoscale
+        Add group label by track names
 
         Parameters
         ----------

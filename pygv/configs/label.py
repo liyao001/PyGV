@@ -7,7 +7,7 @@ class GroupLabelConfig:
     start_track_idx: int
     end_track_idx: int
     label: str
-    x: float = 0.2
+    x: float = 0.02
     x_line_offset: float = 0.015
 
     def __post_init__(self):
