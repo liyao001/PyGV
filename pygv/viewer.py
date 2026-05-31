@@ -8,6 +8,7 @@ import numpy as np
 
 import pygv.tracks
 from pygv import __version__
+from pygv.configs.label import GroupLabelConfig, GroupLabels
 
 
 class GenomeViewer(object):
@@ -80,6 +81,7 @@ class GenomeViewer(object):
         self._inward_ticks = inward_ticks
         self._n_ticks = n_ticks
         self._group_auto_scales = []
+        self._group_labels = GroupLabels()
 
     @staticmethod
     def _supported_fonts():
@@ -161,6 +163,68 @@ class GenomeViewer(object):
 
         if len(tracks) > 0:
             self._group_auto_scales.append(tracks)
+
+    def add_group_label(self, start_track_idx: int, end_track_idx: int, label: str, x=0.02, x_line_offset=0.015):
+        """
+        Add group label
+
+        Parameters
+        ----------
+        start_track_idx : int
+            Index of the start track (0-based)
+        end_track_idx : int
+            Index of the end track (0-based)
+        label : str
+            Group label
+        x : float
+            X-position for the label in figure coordinates (default 0.02).
+        x_line_offset : float
+            Offset for the line from the label in figure coordinates (default 0.015).
+
+        Examples
+        --------
+
+        .. plot:: ../examples/plot_group_label.py
+        """
+        n_total_tracks = len(self._registered_tracks)
+        if end_track_idx >= n_total_tracks:
+            warn(f"End track index {end_track_idx} out of range", RuntimeWarning)
+        else:
+            self._group_labels.add(GroupLabelConfig(
+                start_track_idx=start_track_idx,
+                end_track_idx=end_track_idx,
+                label=label,
+                x=x,
+                x_line_offset=x_line_offset
+            ))
+
+    def add_group_label_by_name(
+        self, start_track_name: str, end_track_name: str, label: str, x=0.02, x_line_offset=0.015
+    ):
+        """
+        Add group autoscale
+
+        Parameters
+        ----------
+        start_track_name : str
+            Name of the start track
+        end_track_name : str
+            Name of the end track
+        label : str
+            Group label
+        x : float
+            X-position for the label in figure coordinates (default 0.02).
+        x_line_offset : float
+            Offset for the line from the label in figure coordinates (default 0.015).
+
+        """
+        all_track_names = [t.name for t in self._registered_tracks]
+        try:
+            stid = all_track_names.index(start_track_name)
+            etid = all_track_names.index(end_track_name)
+            self.add_group_label(stid, etid, label, x=x, x_line_offset=x_line_offset)
+        except ValueError:
+            warn(f"Cannot find Track(s) {start_track_name}, {end_track_name}", RuntimeWarning)
 
     def add_tracks(self, tracks):
         """
@@ -303,6 +367,53 @@ class GenomeViewer(object):
         )
         ax.add_patch(rect)
 
+    def _plot_group_label(self, fig, axes):
+        """
+        Adds a vertical group label and connecting line alongside a group of vertically stacked subplots.
+
+        Parameters:
+            fig : matplotlib.figure.Figure
+                The figure object containing the subplots.
+            axes : list of matplotlib.axes.Axes
+                List of subplot axes, ordered top to bottom.
+        """
+        if len(self._group_labels.label_configs) > 0:
+            fig.canvas.draw()  # Needed to update positions
+
+        for group_config in self._group_labels.label_configs:
+            # Get the bounding boxes of the top and bottom axes
+            start_idx = group_config.start_track_idx
+            end_idx = group_config.end_track_idx
+            x = group_config.x
+            x_line_offset = group_config.x_line_offset
+
+            bbox_top = axes[start_idx].get_position()
+            bbox_bottom = axes[end_idx].get_position()
+
+            # Y coordinates in figure space
+            y_top = bbox_top.y1
+            y_bottom = bbox_bottom.y0
+            y_center = (y_top + y_bottom) / 2
+
+            # Match track-name (ylabel) font size and family.
+            label_font = axes[start_idx].yaxis.label.get_fontproperties()
+
+            # Add vertical label
+            fig.text(
+                x - x_line_offset,
+                y_center,
+                group_config.label,
+                va="center",
+                ha="center",
+                rotation="vertical",
+                fontproperties=label_font,
+            )
+
+            # Add vertical line beside the label
+            fig.lines.append(mpl.pyplot.Line2D([x + x_line_offset, x + x_line_offset],
+                                        [y_bottom, y_top],
+                                        transform=fig.transFigure, color="black", linewidth=1))
+
     def show_tracks(self):
         """
         Show all registered tracks
@@ -360,6 +471,7 @@ class GenomeViewer(object):
         self._plot_chrom = chromosome
         self._plot_start = start
         self._plot_end = end
+        self._axs = None
 
         # Validate and prepare tracks
         self._validate_tracks()
@@ -380,6 +492,10 @@ class GenomeViewer(object):
         # Adjust layout and apply group autoscale
         self._adjust_layout(fig, axs, force_tight_layout)
 
+        # Add group labels if specified
+        self._plot_group_label(fig, axs)
+
+        self._axs = axs
         return axs
 
     def _validate_tracks(self):
