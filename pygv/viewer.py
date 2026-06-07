@@ -367,6 +367,263 @@ class GenomeViewer(object):
         )
         ax.add_patch(rect)
 
+    def set_global_vertical_line(
+        self,
+        position: int,
+        color="red",
+        alpha=0.8,
+        line_width=1.5,
+        line_style="-",
+        margin_frac=0.02,
+    ):
+        """
+        Draw a global vertical line at a single genomic position across all tracks,
+        including spaces between subplots.
+
+        Parameters
+        ----------
+        position : int
+            Genomic coordinate where the line should be drawn.
+        color : str, optional
+            Line color. Default is "red".
+        alpha : float, optional
+            Line transparency. Default is 0.8.
+        line_width : float, optional
+            Line width. Default is 1.5.
+        line_style : str, optional
+            Matplotlib line style. Default is "-".
+        margin_frac : float, optional
+            Fractional amount to extend the line beyond the top of the panel.
+            Helps cover tiny plotting margins near the coordinate axis.
+            Default is 0.02.
+        """
+        if (
+            self._plot_chrom is None
+            or self._plot_start is None
+            or self._plot_end is None
+        ):
+            raise RuntimeError(
+                "You must call the `plot` method before adding a global vertical line."
+            )
+
+        if not (self._plot_start <= position <= self._plot_end):
+            warn(
+                "The position is outside the plotted range and the vertical line will not be displayed.",
+                RuntimeWarning,
+            )
+            return
+
+        fig = mpl.pyplot.gcf()
+        ax = fig.add_subplot(
+            111,
+            label=f"global_vline_{position}_{len(fig.axes)}",
+            zorder=200,
+            frame_on=False,
+        )
+        ax.set_xlim(self._plot_start, self._plot_end)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        ax.axvline(
+            x=position,
+            ymin=0,
+            ymax=1 + margin_frac,
+            color=color,
+            alpha=alpha,
+            linewidth=line_width,
+            linestyle=line_style,
+            clip_on=False,
+        )
+
+    def set_axis_marks(
+        self,
+        positions,
+        color="red",
+        size=8,
+        line_width=1.0,
+        stem_length=0.06,
+        labels=(),
+        label_rotation=90,
+        label_fontsize=None,
+        label_color=None,
+        label_offset=0.04,
+    ):
+        """
+        Add SNP-style lollipop marks to the top coordinate spine of the first track.
+        Each mark is a downward-pointing triangle (``"v"``) sitting on the spine with a
+        short vertical stem dropping from it, matching the style used by the
+        ``UCSCMutationTrack``. Optionally, a text label can be rendered centered above
+        each mark.
+        Must be called after :meth:`~pygv.viewer.GenomeViewer.plot`.
+        Parameters
+        ----------
+        positions : list of int
+            Genomic coordinates at which to draw marks.
+        color : color_like, optional
+            Color for the markers and stems. Default is "red".
+        size : float, optional
+            Marker size (points). Default is 8.
+        line_width : float, optional
+            Width of the stem lines. Default is 1.0.
+        stem_length : float, optional
+            Length of the stem expressed as a fraction of the axes height.
+            Default is 0.06. When set to 0, the marker tip sits on the spine
+            with no stem (the marker is drawn entirely above the line).
+        labels : list of str, optional
+            Text labels for each mark. Must be the same length as ``positions`` when
+            provided. Each label is centered horizontally on its mark.
+        label_rotation : float, optional
+            Rotation angle for labels in degrees. Default is 90 (vertical).
+        label_fontsize : float or None, optional
+            Font size for labels. Defaults to the current rcParams font size.
+        label_color : color_like or None, optional
+            Color for labels. Defaults to ``color`` when not set.
+        label_offset : float, optional
+            Gap between the top of the marker and the label base, expressed as a
+            fraction of the axes height. Default is 0.04.
+        """
+        if self._axs is None:
+            raise RuntimeError(
+                "You must call the `plot` method before adding axis marks."
+            )
+        # Filter to positions in range, keeping matching labels in sync.
+        labels = list(labels)
+        has_labels = len(labels) > 0
+        if has_labels and len(labels) != len(positions):
+            raise ValueError(
+                "labels must have the same length as positions."
+            )
+        filtered = [
+            (p, labels[i] if has_labels else None)
+            for i, p in enumerate(positions)
+            if self._plot_start <= p <= self._plot_end
+        ]
+        if not filtered:
+            warn(
+                "None of the provided positions are within the plotted range.",
+                RuntimeWarning,
+            )
+            return
+        ax = self._axs[0]
+        effective_label_color = label_color if label_color is not None else color
+
+        # The top spine is pushed 10 pts outward (Track._draw_track). Add the
+        # same offset so y=1.0 in our mark coordinates lands on the spine line.
+        from matplotlib.transforms import ScaledTranslation
+        spine_offset = ScaledTranslation(
+            0, 10 / 72, ax.figure.dpi_scale_trans
+        )
+        # x in data coords, y in axes-fraction [0=bottom, 1=top of axes box]
+        transform = ax.get_xaxis_transform() + spine_offset
+
+        spine_y = 1.0
+        if stem_length > 0:
+            marker_y = spine_y + stem_length
+        else:
+            # Scatter markers are centered on their y position. Shift upward by
+            # half the marker height so the "v" tip touches the spine.
+            pos = ax.get_position()
+            ax_height_pts = pos.height * ax.figure.get_figheight() * ax.figure.dpi
+            marker_half_frac = (size / 2.0) / ax_height_pts if ax_height_pts else 0.0
+            marker_y = spine_y + marker_half_frac
+
+        filtered_positions = [p for p, _ in filtered]
+        ax.scatter(
+            filtered_positions,
+            [marker_y] * len(filtered_positions),
+            marker="v",
+            color=color,
+            s=size ** 2,
+            zorder=200,
+            clip_on=False,
+            transform=transform,
+        )
+        for pos, label in filtered:
+            if stem_length > 0:
+                ax.plot(
+                    [pos, pos],
+                    [spine_y, marker_y],
+                    color=color,
+                    linewidth=line_width,
+                    transform=transform,
+                    clip_on=False,
+                    zorder=199,
+                )
+            if label is not None:
+                ax.text(
+                    pos,
+                    marker_y + label_offset,
+                    label,
+                    transform=transform,
+                    ha="center",
+                    va="bottom",
+                    rotation=label_rotation,
+                    fontsize=label_fontsize,
+                    color=effective_label_color,
+                    clip_on=False,
+                    zorder=201,
+                )
+
+        self._reserve_top_margin_for_axis_marks(
+            ax=ax,
+            marker_y=marker_y,
+            label_offset=label_offset,
+            labels=[label for _, label in filtered if label],
+            label_fontsize=label_fontsize,
+            label_rotation=label_rotation,
+            size=size,
+        )
+
+    @staticmethod
+    def _reserve_top_margin_for_axis_marks(
+        ax,
+        marker_y,
+        label_offset,
+        labels,
+        label_fontsize,
+        label_rotation,
+        size,
+    ):
+        """
+        Leave room above the first track for outward spines, marks, and labels.
+
+        Without this, artists drawn above the axes bbox can be clipped until the
+        figure is resized and matplotlib recomputes layout.
+        """
+        SPINE_OUTWARD_PT = 10
+        fig = ax.figure
+        fig.canvas.draw()
+
+        pos = ax.get_position()
+        fig_height_pts = fig.get_figheight() * fig.dpi
+        if pos.height <= 0 or fig_height_pts <= 0:
+            return
+
+        ax_height_pts = pos.height * fig_height_pts
+        extra_axes_frac = max(marker_y - 1.0, 0.0)
+        extra_axes_frac += SPINE_OUTWARD_PT / ax_height_pts
+        extra_axes_frac += (size / 2.0) / ax_height_pts
+
+        if labels:
+            extra_axes_frac += label_offset
+            fontsize = label_fontsize or mpl.rcParams["font.size"]
+            max_len = max(len(label) for label in labels)
+            if label_rotation in (0, 180):
+                label_pts = fontsize * max(1.2, max_len * 0.6)
+            else:
+                label_pts = fontsize * max(1.2, max_len * 0.55)
+            extra_axes_frac += label_pts / ax_height_pts
+
+        if ax.get_title():
+            title_fontsize = ax.title.get_fontsize() or mpl.rcParams["font.size"]
+            extra_axes_frac += title_fontsize * 1.4 / ax_height_pts
+
+        extra_fig_frac = extra_axes_frac * pos.height + 0.015
+        available = 1.0 - pos.y1
+        if extra_fig_frac > available:
+            fig.subplots_adjust(top=fig.subplotpars.top - (extra_fig_frac - available))
+
+        fig.canvas.draw_idle()
+
     def _plot_group_label(self, fig, axes):
         """
         Adds a vertical group label and connecting line alongside a group of vertically stacked subplots.
