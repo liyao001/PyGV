@@ -1,5 +1,5 @@
 # Python Genome Viewer (PyGV)
-![GitHub CI](https://github.com/liyao001/pygv/actions/workflows/publish-pypi.yml/badge.svg) ![Read the Docs](https://app.readthedocs.org/projects/pygv/badge)
+[![GitHub CI](https://github.com/liyao001/pygv/actions/workflows/publish-pypi.yml/badge.svg)](https://github.com/liyao001/PyGV/actions/workflows/publish-pypi.yml) [![Read the Docs](https://app.readthedocs.org/projects/pygv/badge)](https://pygv.readthedocs.io/)
 
 PyGV, short for *Py*thon *G*enome *V*iewer, is a powerful and user-friendly Python package designed to empower
 researchers and genomics enthusiasts with the tools they need to create publication-ready, highly customizable genomic
