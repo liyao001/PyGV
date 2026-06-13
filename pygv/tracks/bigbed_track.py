@@ -1,18 +1,51 @@
 import os
 import warnings
 from collections import namedtuple
+from typing import Any, ClassVar
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pyBigWig
 from matplotlib.lines import Line2D
+from pydantic import Field, field_validator
 
-from .bed_track import BedTrack
-from .track import NumericalTrack
+from .bed_track import BedTrack, BedTrackConfig
+from .track import NumericalTrack, NumericalTrackConfig
 
 
-class UCSCMutationTrack(NumericalTrack):
+class UCSCMutationTrackConfig(NumericalTrackConfig):
+    line_color: Any = Field(
+        default="red", description="Matplotlib color used for mutation marker lines."
+    )
+    apply_color_gradient: bool = Field(
+        default=False, description="Whether to color mutation markers with a value gradient."
+    )
+    color_map: Any = Field(
+        default=plt.cm.Reds, description="Callable colormap used for mutation color gradients."
+    )
+    normalizer: Any = Field(
+        default=matplotlib.colors.Normalize,
+        description="Callable normalizer used before applying the mutation color map.",
+    )
+
+    @field_validator("line_color")
+    def _validate_line_color(cls, value):
+        if value is None or matplotlib.colors.is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+    @field_validator("color_map", "normalizer")
+    def _validate_callable(cls, value):
+        if callable(value):
+            return value
+        raise ValueError("color_map and normalizer must be callable")
+
+class BigBed6TrackConfig(BedTrackConfig):
+    pass
+
+
+class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
     """
     Lollipop plot from UCSC-style mutational bigwig files
 
@@ -27,6 +60,14 @@ class UCSCMutationTrack(NumericalTrack):
         color_map : str or `matplotlib.pyplot.cm`
             :attr:`color_map`
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **NumericalTrack._FIELD_PRIVATE_ATTRS,
+        "line_color": "_line_color",
+        "apply_color_gradient": "_apply_color_gradient",
+        "color_map": "_color_map",
+        "normalizer": "_normalizer",
+    }
 
     @property
     def line_color(self):
@@ -73,16 +114,19 @@ class UCSCMutationTrack(NumericalTrack):
             pass
 
     def __init__(self, track, **kwargs):
+        config = UCSCMutationTrackConfig(**kwargs)
+        if not callable(config.color_map) or not callable(config.normalizer):
+            raise ValueError("color_map and normalizer must be callable")
         super(UCSCMutationTrack, self).__init__(**kwargs)
         self._filters = dict()
         self._filter_supported_fields = {"MAF", "ID"}
         self._line_color = "red"
-        self.line_color = kwargs.pop("line_color", "red")
+        self.line_color = config.line_color
         self._apply_color_gradient = False
-        self.apply_color_gradient = kwargs.get("apply_color_gradient", False)
+        self.apply_color_gradient = config.apply_color_gradient
         self._color_map = plt.cm.Reds
-        self.color_map = kwargs.get("color_map", plt.cm.Reds)
-        self._normalizer = kwargs.get("normalizer", matplotlib.colors.Normalize)
+        self.color_map = config.color_map
+        self._normalizer = config.normalizer
         if not os.path.exists(track) and not track.startswith("http"):
             raise ValueError
 
@@ -223,7 +267,7 @@ class UCSCMutationTrack(NumericalTrack):
                 pass
 
 
-class BigBed6Track(BedTrack):
+class BigBed6Track(BedTrack, BigBed6TrackConfig):
     """
     Standard BigBed6 track
 
@@ -267,6 +311,7 @@ class BigBed6Track(BedTrack):
             return []
 
     def __init__(self, track, **kwargs):
+        BigBed6TrackConfig(**kwargs)
         kwargs["_is_bb"] = True
         super(BigBed6Track, self).__init__(track, **kwargs)
         # parse bed file

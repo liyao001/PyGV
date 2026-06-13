@@ -2,16 +2,46 @@ import math
 import os
 import re
 from collections import OrderedDict, namedtuple
+from typing import ClassVar
 import numpy as np
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
+from pydantic import Field, field_validator
 
 from .bed_track import _LaneRegistry
-from .track import AnnotationTrack
+from .track import AnnotationTrack, AnnotationTrackConfig
 
 
-class GtfTrack(AnnotationTrack):
+class GtfTrackConfig(AnnotationTrackConfig):
+    filters: object = Field(
+        default=None, description="Optional callable used to filter GTF records before plotting."
+    )
+    show_genes: bool = Field(
+        default=False, description="Whether to draw gene-level features in addition to transcripts."
+    )
+    annotation_formatter: object = Field(
+        default=None, description="Optional callable used to format annotation labels."
+    )
+    show_transcript_id: bool = Field(
+        default=False, description="Whether to use transcript IDs in annotation labels."
+    )
+
+    @field_validator("filters", "annotation_formatter")
+    def _validate_optional_callable(cls, value):
+        if value is None or callable(value):
+            return value
+        raise ValueError("filters and annotation_formatter must be None or callable")
+
+
+class GtfTrack(AnnotationTrack, GtfTrackConfig):
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **AnnotationTrack._FIELD_PRIVATE_ATTRS,
+        "filters": "_filters",
+        "show_genes": "show_gene",
+        "show_transcript_id": "_show_transcript_id",
+    }
     Gtf track
 
     Parameters
@@ -116,6 +146,12 @@ class GtfTrack(AnnotationTrack):
     def __init__(
         self, track, filters=None, show_genes=False, annotation_formatter=None, **kwargs
     ):
+        config = GtfTrackConfig(
+            filters=filters,
+            show_genes=show_genes,
+            annotation_formatter=annotation_formatter,
+            **kwargs,
+        )
         super(GtfTrack, self).__init__(track, **kwargs)
         if not os.path.exists(track) and not track.startswith("http"):
             raise ValueError
@@ -165,15 +201,15 @@ class GtfTrack(AnnotationTrack):
 
         self._plot_block = 1
         self._filters = None
-        self.filters = filters
-        self.show_gene = show_genes
+        self.filters = config.filters
+        self.show_gene = config.show_genes
         self._show_transcript_id = True
-        self.show_transcript_id = kwargs.pop("show_transcript_id", False)
-        if annotation_formatter is None or not callable(annotation_formatter):
+        self.show_transcript_id = config.show_transcript_id
+        if config.annotation_formatter is None:
             # default: echo
             self.annotation_formatter = lambda x: x
         else:
-            self.annotation_formatter = annotation_formatter
+            self.annotation_formatter = config.annotation_formatter
 
     @property
     def filters(self):

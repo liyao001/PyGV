@@ -1,13 +1,74 @@
 import numpy as np
 import pyBigWig
+from typing import ClassVar
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import is_color_like
 from matplotlib.patches import Rectangle
+from pydantic import Field, field_validator
 from pygv.utils import check_accessibility
 
-from .track import NumericalTrack
+from .track import NumericalTrack, NumericalTrackConfig
 
 
-class BigWigTrack(NumericalTrack):
+class BigWigTrackConfig(NumericalTrackConfig):
+    plot_type: str = Field(
+        default="line", description="Rendering style for BigWig signals: 'line' or 'bar'."
+    )
+
+    @field_validator("plot_type")
+    def _validate_plot_type(cls, value):
+        if value in {"line", "bar"}:
+            return value
+        raise ValueError("plot_type must be either 'line' or 'bar'")
+
+
+class OverlayingTrackConfig(NumericalTrackConfig):
+    palette: str = Field(
+        default="Set1", description="Seaborn/Matplotlib palette used for overlaid tracks."
+    )
+    colors: object = Field(
+        default=None, description="Explicit Matplotlib colors for overlaid tracks."
+    )
+    legend: bool = Field(default=True, description="Whether to draw a legend.")
+    legend_kws: object = Field(
+        default=None, description="Keyword arguments passed to legend creation."
+    )
+
+    @field_validator("colors")
+    def _validate_colors(cls, value):
+        if value is None:
+            return value
+        if all(map(is_color_like, value)):
+            return value
+        raise ValueError("colors must contain only Matplotlib color-like values")
+
+    @field_validator("legend_kws")
+    def _validate_legend_kws(cls, value):
+        if value is None or isinstance(value, dict):
+            return value
+        raise ValueError("legend_kws must be None or a dict")
+
+
+class PairedStrandSpecificTrackConfig(BigWigTrackConfig):
+    draw_y_independently: bool = Field(
+        default=True,
+        description="Whether positive and negative strand signals use independent y ranges.",
+    )
+    pos_color: object = Field(
+        default="#E10600", description="Matplotlib color for positive-strand signal."
+    )
+    neg_color: object = Field(
+        default="#0048AC", description="Matplotlib color for negative-strand signal."
+    )
+
+    @field_validator("pos_color", "neg_color")
+    def _validate_colors(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+
+class BigWigTrack(NumericalTrack, BigWigTrackConfig):
     """
     Generic BigWig track
 
@@ -27,6 +88,7 @@ class BigWigTrack(NumericalTrack):
         kwargs
 
         """
+        config = BigWigTrackConfig(plot_type=plot_type, **kwargs)
         super(BigWigTrack, self).__init__(**kwargs)
         if isinstance(track, str):
             check_accessibility(track, allow_remote=True)
@@ -39,7 +101,7 @@ class BigWigTrack(NumericalTrack):
                 check_accessibility(sub_t, allow_remote=True)
                 self.bw.append(pyBigWig.open(sub_t))
 
-        self.plot_type = plot_type
+        self.plot_type = config.plot_type
 
     def _get(self, chromosome, start, end, nan_as_zero=True):
         """
@@ -157,7 +219,7 @@ class BigWigTrack(NumericalTrack):
             )
 
 
-class OverlayingTrack(NumericalTrack):
+class OverlayingTrack(NumericalTrack, OverlayingTrackConfig):
     """
     Overlay BigWig tracks (signals from multiple BigWig files in the same track) in a single track
 
@@ -181,6 +243,13 @@ class OverlayingTrack(NumericalTrack):
 
     .. plot:: ../examples/plot_overlaying_bigwigs.py
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **NumericalTrack._FIELD_PRIVATE_ATTRS,
+        "colors": "_colors",
+        "legend": "_legend",
+        "legend_kws": "_legend_kws",
+    }
 
     @property
     def labels(self):
@@ -216,6 +285,13 @@ class OverlayingTrack(NumericalTrack):
         legend_kws=None,
         **kwargs,
     ):
+        config = OverlayingTrackConfig(
+            palette=palette,
+            colors=colors,
+            legend=legend,
+            legend_kws=legend_kws,
+            **kwargs,
+        )
         super(OverlayingTrack, self).__init__(**kwargs)
         self.bws = []
         for track in tracks:
@@ -226,14 +302,14 @@ class OverlayingTrack(NumericalTrack):
         from seaborn.palettes import color_palette
 
         self._colors = None
-        if colors is None:
-            self.colors = color_palette(palette=palette, n_colors=len(tracks))
+        if config.colors is None:
+            self.colors = color_palette(palette=config.palette, n_colors=len(tracks))
         else:
-            self.colors = colors
-        self._legend = legend
+            self.colors = config.colors
+        self._legend = config.legend
 
         _default_legend_conf = {"frameon": False}
-        self._legend_kws = legend_kws if isinstance(legend_kws, dict) else {}
+        self._legend_kws = config.legend_kws if isinstance(config.legend_kws, dict) else {}
 
     def _get(self, chromosome, start, end):
         value_list = []
@@ -295,7 +371,7 @@ class OverlayingTrack(NumericalTrack):
             self._ax.legend(**self._legend_kws)
 
 
-class PairedStrandSpecificTrack(NumericalTrack):
+class PairedStrandSpecificTrack(NumericalTrack, PairedStrandSpecificTrackConfig):
     """
     Paired strand-specific tracks
 
@@ -360,12 +436,16 @@ class PairedStrandSpecificTrack(NumericalTrack):
         plot_type: str = "line",
         **kwargs,
     ):
+        config = PairedStrandSpecificTrackConfig(
+            draw_y_independently=draw_y_independently, plot_type=plot_type, **kwargs
+        )
         super(PairedStrandSpecificTrack, self).__init__(**kwargs)
+        self.draw_y_independently = config.draw_y_independently
         # color
         self._pos_color = "#E10600"
-        self.pos_color = kwargs.get("pos_color", "#E10600")
+        self.pos_color = config.pos_color
         self._neg_color = "#0048AC"
-        self.neg_color = kwargs.get("neg_color", "#0048AC")
+        self.neg_color = config.neg_color
 
         for t in (pl_track, mn_track):
             if isinstance(t, str):
@@ -387,8 +467,8 @@ class PairedStrandSpecificTrack(NumericalTrack):
         else:
             self.mn_bw = list([pyBigWig.open(f) for f in mn_track])
         assert len(self.pl_bw) == len(self.mn_bw)
-        self._equal_space_for_pos_neg_ranges = draw_y_independently
-        self.plot_type = plot_type
+        self._equal_space_for_pos_neg_ranges = self.draw_y_independently
+        self.plot_type = config.plot_type
 
     def _get(self, chromosome, start, end, nan_as_zero=True):
         pl_values = np.stack(
@@ -557,8 +637,9 @@ class PairedStrandlessTrack(BigWigTrack):
     """
 
     def __init__(self, pl_track, mn_track, plot_type: str = "line", **kwargs):
+        config = BigWigTrackConfig(plot_type=plot_type, **kwargs)
         super(PairedStrandlessTrack, self).__init__(
-            track=pl_track, plot_type=plot_type, **kwargs
+            track=pl_track, plot_type=config.plot_type, **kwargs
         )
         self.pl_bw = []
         self.mn_bw = []
@@ -583,7 +664,7 @@ class PairedStrandlessTrack(BigWigTrack):
             self.mn_bw = list([pyBigWig.open(f) for f in mn_track])
         assert len(self.pl_bw) == len(self.mn_bw)
 
-        self.plot_type = plot_type
+        self.plot_type = config.plot_type
 
     def _get(self, chromosome, start, end, nan_as_zero=True):
         pl_values = np.stack(

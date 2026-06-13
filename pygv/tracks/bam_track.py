@@ -1,5 +1,6 @@
 import os
 from collections import namedtuple
+from typing import ClassVar
 
 import numpy as np
 import pysam
@@ -7,14 +8,133 @@ from matplotlib.collections import PatchCollection
 from matplotlib.colors import is_color_like
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
+from pydantic import Field, field_validator
 
 from pygv.errors.DataIntegrity import BamIndexDoesntExists
 
 from .bed_track import _LaneRegistry
-from .track import NumericalTrack, Track
+from .track import NumericalTrack, NumericalTrackConfig, Track, TrackConfig
 
 
-class _GenericNumericalBamTrack(NumericalTrack):
+class GenericNumericalBamTrackConfig(NumericalTrackConfig):
+    read_colors: object = Field(
+        default=("#E69696", "#9696E6"),
+        description="Matplotlib colors used for reads in different strand conditions.",
+    )
+    flip_strand: bool = Field(
+        default=False, description="Whether to flip read strand orientation."
+    )
+
+    @field_validator("read_colors")
+    def _validate_read_colors(cls, value):
+        if all(map(is_color_like, value)):
+            return value
+        raise ValueError("read_colors must contain only Matplotlib color-like values")
+
+
+class GenericBamTrackConfig(TrackConfig):
+    allowed_features: object = None
+    color_reads_by: object = Field(
+        default=None, description="Read attribute or method used to color alignments."
+    )
+    color_legends: object = Field(
+        default=None, description="Legend labels for read color categories."
+    )
+    legend_title: object = Field(
+        default="Mapping direction", description="Title shown above the read color legend."
+    )
+    read_colors: object = Field(
+        default=("#E69696", "#9696E6"),
+        description="Matplotlib colors used for read categories.",
+    )
+    sampling_ratio: float = Field(
+        default=1.0, ge=0, le=1, description="Fraction of reads to sample for plotting."
+    )
+
+    _SUPPORTED_COLOR_METHOD: ClassVar[tuple] = (
+        "insert size",
+        "pair orientation",
+        "insert size and pair orientation",
+        "read strand",
+        "first of pair strand",
+        "read group",
+        "sample",
+        "library",
+        "movie",
+        "ZMW",
+        "tag",
+        "no color",
+    )
+
+    @field_validator("read_colors")
+    def _validate_read_colors(cls, value):
+        if all(map(is_color_like, value)):
+            return value
+        raise ValueError("read_colors must contain only Matplotlib color-like values")
+
+    @field_validator("color_reads_by")
+    def _validate_color_reads_by(cls, value):
+        if value in cls._SUPPORTED_COLOR_METHOD or value is None:
+            return value
+        raise ValueError("Not supported option")
+
+
+class CollapsedReadTrackConfig(GenericBamTrackConfig):
+    patch_height: float = Field(
+        default=1, gt=0, description="Height of each collapsed read patch."
+    )
+    line_color: object = Field(
+        default="#96B8C8", description="Matplotlib color used for collapsed read lines."
+    )
+    max_num_read: int = Field(
+        default=500, gt=0, description="Maximum number of reads to draw."
+    )
+    pileup_offset: float = Field(
+        default=0.1, ge=0, description="Vertical offset between piled-up reads."
+    )
+
+    @field_validator("line_color")
+    def _validate_line_color(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+
+class SplicedReadTrackConfig(GenericBamTrackConfig):
+    padding_left: float = Field(
+        default=0, ge=0, description="Extra left-side spacing used when placing reads."
+    )
+    padding_right: float = Field(
+        default=0, ge=0, description="Extra right-side spacing used when placing reads."
+    )
+    show_name: bool = Field(default=True, description="Whether to draw read names.")
+    patch_height: float = Field(
+        default=1, gt=0, description="Height of each spliced read patch."
+    )
+    lane_space: float = Field(
+        default=0.25, ge=0, description="Extra vertical spacing between read lanes."
+    )
+    features_per_lane: int = Field(
+        default=3, gt=0, description="Maximum number of reads grouped into each lane."
+    )
+    line_color: object = Field(
+        default="black", description="Matplotlib color used for spliced read connector lines."
+    )
+    box_color: object = Field(
+        default="#A1A1A1", description="Matplotlib fill color for spliced read boxes."
+    )
+    box_border: object = Field(
+        default="#6E6E6E", description="Matplotlib edge color for spliced read boxes."
+    )
+
+    @field_validator("line_color", "box_color", "box_border")
+    def _validate_colors(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+
+class _GenericNumericalBamTrack(NumericalTrack, GenericNumericalBamTrackConfig):
     """
     Generic numerical track for bam files
 
@@ -30,6 +150,12 @@ class _GenericNumericalBamTrack(NumericalTrack):
         flip_strand : bool
             :attr:`flip_strand`
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **NumericalTrack._FIELD_PRIVATE_ATTRS,
+        "read_colors": "_read_colors",
+        "flip_strand": "_flip_strand",
+    }
 
     @property
     def read_colors(self):
@@ -86,9 +212,9 @@ class _GenericNumericalBamTrack(NumericalTrack):
             )
 
         self._read_colors = ("#E69696", "#9696E6")
-        self.read_colors = kwargs.pop("read_colors", ("#E69696", "#9696E6"))
+        self.read_colors = self.__dict__["read_colors"]
         self._flip_strand = False
-        self.flip_strand = kwargs.pop("flip_strand", False)
+        self.flip_strand = self.__dict__["flip_strand"]
         self._filters = None
         self.filters = filters
 
@@ -96,7 +222,7 @@ class _GenericNumericalBamTrack(NumericalTrack):
         pass
 
 
-class _GenericBamTrack(Track):
+class _GenericBamTrack(Track, GenericBamTrackConfig):
     """
     Generic track for bam files
 
@@ -116,6 +242,16 @@ class _GenericBamTrack(Track):
         flip_strand : bool
             :attr:`flip_strand`
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **Track._FIELD_PRIVATE_ATTRS,
+        "allowed_features": "_allowed_features",
+        "color_reads_by": "_color_reads_by",
+        "color_legends": "_color_legends",
+        "legend_title": "_legend_title",
+        "read_colors": "_read_colors",
+        "sampling_ratio": "_sampling_ratio",
+    }
 
     @property
     def read_colors(self):
@@ -212,7 +348,7 @@ class _GenericBamTrack(Track):
 
         # lane manager
         self._lane_registries = []
-        self.allowed_features = kwargs.pop("allowed_features", None)
+        self.allowed_features = self.__dict__["allowed_features"]
 
         # read colors
         self._SUPPORTED_COLOR_METHOD = (
@@ -230,22 +366,22 @@ class _GenericBamTrack(Track):
             "no color",
         )
         self._color_reads_by = None
-        self.color_reads_by = kwargs.pop("color_reads_by", None)
+        self.color_reads_by = self.__dict__["color_reads_by"]
         self._color_legends = None
-        self.color_legends = kwargs.pop("color_legends", None)
+        self.color_legends = self.__dict__["color_legends"]
         self._legend_title = None
-        self.legend_title = kwargs.pop("legend_title", "Mapping direction")
+        self.legend_title = self.__dict__["legend_title"]
 
         self._read_colors = ("#E69696", "#9696E6")
-        self.read_colors = kwargs.pop("read_colors", ("#E69696", "#9696E6"))
+        self.read_colors = self.__dict__["read_colors"]
 
         self._allowed_features = None
-        self.allowed_features = kwargs.pop("allowed_features", None)
+        self.allowed_features = self.__dict__["allowed_features"]
 
         self._filters = None
         self.filters = filters
 
-        self._sampling_ratio = 1.0
+        self._sampling_ratio = self.__dict__["sampling_ratio"]
 
     def _get(self, chromosome, start, end):
         pass
@@ -329,7 +465,7 @@ class CoverageTrack(_GenericNumericalBamTrack):
             pass
 
 
-class CollapsedReadTrack(_GenericBamTrack):
+class CollapsedReadTrack(_GenericBamTrack, CollapsedReadTrackConfig):
     """
     Plot collapsed reads (only 5' end and the span)
 
@@ -351,6 +487,14 @@ class CollapsedReadTrack(_GenericBamTrack):
 
     .. plot:: ../examples/plot_bam_collapsed_reads.py
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **_GenericBamTrack._FIELD_PRIVATE_ATTRS,
+        "patch_height": "_patch_height",
+        "line_color": "_line_color",
+        "max_num_read": "_max_num_read",
+        "pileup_offset": "_pileup_offset",
+    }
 
     @property
     def line_color(self):
@@ -385,7 +529,7 @@ class CollapsedReadTrack(_GenericBamTrack):
         """
         Max number of reads in the visible window, if there are more reads, random downsampling will be used
         """
-        return self._patch_height
+        return self._max_num_read
 
     @max_num_read.setter
     def max_num_read(self, value):
@@ -399,7 +543,7 @@ class CollapsedReadTrack(_GenericBamTrack):
         """
         offset of pileup, by default, 0.1
         """
-        return self.pileup_offset
+        return self._pileup_offset
 
     @pileup_offset.setter
     def pileup_offset(self, value):
@@ -409,15 +553,16 @@ class CollapsedReadTrack(_GenericBamTrack):
             pass
 
     def __init__(self, track, **kwargs):
+        config = CollapsedReadTrackConfig(**kwargs)
         super(CollapsedReadTrack, self).__init__(track, **kwargs)
         self._patch_height = 1
-        self.patch_height = kwargs.pop("patch_height", 1)
+        self.patch_height = config.patch_height
         self._line_color = "#96B8C8"
-        self.line_color = kwargs.pop("line_color", "#96B8C8")
+        self.line_color = config.line_color
         self._max_num_read = 500
-        self.max_num_read = kwargs.pop("max_num_read", 500)
+        self.max_num_read = config.max_num_read
         self._pileup_offset = 0.1
-        self.pileup_offset = kwargs.pop("pileup_offset", 0.1)
+        self.pileup_offset = config.pileup_offset
 
     def _get(self, chromosome, start, end):
         # values = np.nan_to_num(self.bw.values(chromosome, start, end))
@@ -516,7 +661,7 @@ class CollapsedReadTrack(_GenericBamTrack):
         self._ax.set_xlim((start, end))
 
 
-class SplicedReadTrack(_GenericBamTrack):
+class SplicedReadTrack(_GenericBamTrack, SplicedReadTrackConfig):
     """
     Plot spliced reads
 
@@ -544,6 +689,19 @@ class SplicedReadTrack(_GenericBamTrack):
 
     .. plot:: ../examples/plot_bam_spliced_reads.py
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **_GenericBamTrack._FIELD_PRIVATE_ATTRS,
+        "padding_left": "_padding_left",
+        "padding_right": "_padding_right",
+        "show_name": "_show_name",
+        "patch_height": "_patch_height",
+        "lane_space": "_lane_space",
+        "features_per_lane": "_features_per_lane",
+        "line_color": "_line_color",
+        "box_color": "_box_color",
+        "box_border": "_box_border",
+    }
 
     @property
     def padding_left(self):
@@ -644,25 +802,26 @@ class SplicedReadTrack(_GenericBamTrack):
             pass
 
     def __init__(self, track, **kwargs):
+        config = SplicedReadTrackConfig(**kwargs)
         super(SplicedReadTrack, self).__init__(track, **kwargs)
 
         self._lane_registries = []
         self._padding_left = 0
-        self.padding_left = kwargs.pop("padding_left", 0)
+        self.padding_left = config.padding_left
         self._padding_right = 0
-        self.padding_right = kwargs.pop("padding_right", 0)
+        self.padding_right = config.padding_right
         self._show_name = True
-        self.show_name = kwargs.pop("show_name", True)
+        self.show_name = config.show_name
         self._patch_height = 1
-        self.patch_height = kwargs.pop("patch_height", 1)
+        self.patch_height = config.patch_height
         self._lane_space = 0.25
-        self.lane_space = kwargs.pop("lane_space", 0.25)
+        self.lane_space = config.lane_space
         self._line_color = "black"
-        self.line_color = kwargs.pop("line_color", "black")
-        self._box_color = kwargs.pop("box_color", "#A1A1A1")
-        self._box_border = kwargs.pop("box_border", "#6E6E6E")
+        self.line_color = config.line_color
+        self._box_color = config.box_color
+        self._box_border = config.box_border
         self._features_per_lane = 3
-        self.features_per_lane = kwargs.pop("features_per_lane", 3)
+        self.features_per_lane = config.features_per_lane
 
     def _get(self, chromosome, start, end):
         func = "all" if self._filters is None else self._filters

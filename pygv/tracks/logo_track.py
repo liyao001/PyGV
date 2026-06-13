@@ -2,13 +2,73 @@ import numpy as np
 import pandas as pd
 import pyBigWig
 from pyfaidx import Fasta
+from typing import ClassVar
+from pydantic import Field, field_validator
 from pygv.tracks.logomaker.Logo import Logo
 from pygv.utils import check_accessibility
 
-from .track import NumericalTrack
+from .track import NumericalTrack, NumericalTrackConfig
 
 
-class LogoTrack(NumericalTrack):
+class LogoTrackConfig(NumericalTrackConfig):
+    values: object = Field(
+        default=None, description="Logo matrix as a DataFrame or 2D array."
+    )
+    color_scheme: object = Field(
+        default=None, description="Color scheme used to render logo characters."
+    )
+    font_name: str = Field(
+        default="sans", description="Font name used to render logo characters."
+    )
+    stack_order: str = Field(
+        default="big_on_top",
+        description="Order used to stack logo glyphs: 'big_on_top', 'small_on_top', or 'fixed'.",
+    )
+    center_values: bool = Field(
+        default=False, description="Whether to center each logo matrix row around zero."
+    )
+    flip_below: bool = Field(
+        default=True, description="Whether to flip characters drawn below the x-axis."
+    )
+    shade_below: float = Field(
+        default=0.0,
+        ge=0,
+        le=1,
+        description="Amount of shading applied to characters below the x-axis.",
+    )
+    fade_below: float = Field(
+        default=0.0,
+        ge=0,
+        le=1,
+        description="Amount of fading applied to characters below the x-axis.",
+    )
+    fade_probabilities: bool = Field(
+        default=False,
+        description="Whether character opacity should follow probability values.",
+    )
+
+    @field_validator("stack_order")
+    def _validate_stack_order(cls, value):
+        if value in {"big_on_top", "small_on_top", "fixed"}:
+            return value
+        raise ValueError("stack_order must be 'big_on_top', 'small_on_top', or 'fixed'")
+
+    @field_validator("values")
+    def _validate_values(cls, value):
+        if value is None or isinstance(value, pd.DataFrame):
+            return value
+        if isinstance(value, np.ndarray) and len(value.shape) == 2 and value.shape[1] in {4, 20}:
+            return value
+        raise ValueError("values must be None, a DataFrame, or a 2D array with 4 or 20 columns")
+
+
+class DynseqTrackConfig(LogoTrackConfig):
+    is_nucleotide: bool = Field(
+        default=True, description="Whether dynamic sequence values should be treated as nucleotides."
+    )
+
+
+class LogoTrack(NumericalTrack, LogoTrackConfig):
     """
     Sequence logo track. The implementation is built on the top of logomaker.
     After creating the track object, logo matrix should be assigned using :attr:`values`.
@@ -77,18 +137,76 @@ class LogoTrack(NumericalTrack):
     .. plot:: ../examples/plot_logo.py
     """
 
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **NumericalTrack._FIELD_PRIVATE_ATTRS,
+        "values": "_values",
+    }
+
+    def _sync_private_field(self, name):
+        if name == "values":
+            object.__setattr__(
+                self, "_values", self._normalize_values(self.__dict__[name])
+            )
+            return
+        super()._sync_private_field(name)
+
+    @staticmethod
+    def _normalize_values(value):
+        if value is None:
+            return None
+        if isinstance(value, np.ndarray):
+            if value.shape[1] == 4:
+                return pd.DataFrame(value, columns=["A", "C", "G", "T"])
+            if value.shape[1] == 20:
+                return pd.DataFrame(
+                    value,
+                    columns=[
+                        "A",
+                        "C",
+                        "D",
+                        "E",
+                        "F",
+                        "G",
+                        "H",
+                        "I",
+                        "K",
+                        "L",
+                        "M",
+                        "N",
+                        "P",
+                        "Q",
+                        "R",
+                        "S",
+                        "T",
+                        "V",
+                        "W",
+                        "Y",
+                    ],
+                )
+            raise ValueError(
+                "When providing an array as pwm, "
+                "the columns of the array must be standard nucleotides (4) "
+                "or amino acids (20) sorted alphabetically. Otherwise, please "
+                "provide the matrix as a DataFrame."
+            )
+        if isinstance(value, pd.DataFrame):
+            return value
+        raise ValueError("values must be None, a numpy array, or a pandas DataFrame")
+
     def __init__(self, track: str = "", **kwargs):
+        config = LogoTrackConfig(**kwargs)
         super(LogoTrack, self).__init__(**kwargs)
 
         self._values = None
-        self.color_scheme = kwargs.get("color_scheme", None)
-        self.font_name = kwargs.get("font_name", "sans")
-        self.stack_order = kwargs.get("stack_order", "big_on_top")
-        self.center_values = kwargs.get("center_values", False)
-        self.flip_below = kwargs.get("flip_below", True)
-        self.shade_below = kwargs.get("shade_below", 0.0)
-        self.fade_below = kwargs.get("fade_below", 0.0)
-        self.fade_probabilities = kwargs.get("fade_probabilities", False)
+        self.values = config.values
+        self.color_scheme = config.color_scheme
+        self.font_name = config.font_name
+        self.stack_order = config.stack_order
+        self.center_values = config.center_values
+        self.flip_below = config.flip_below
+        self.shade_below = config.shade_below
+        self.fade_below = config.fade_below
+        self.fade_probabilities = config.fade_probabilities
 
     @property
     def values(self):
@@ -145,7 +263,6 @@ class LogoTrack(NumericalTrack):
                 )
         elif isinstance(value, pd.DataFrame):
             self._values = value
-        self._values = value
 
     def _get(self, chromosome, start, end):
         xvalues = np.arange(start, end, step=1)
@@ -198,7 +315,7 @@ class LogoTrack(NumericalTrack):
         self._ax = ax
 
 
-class DynseqTrack(NumericalTrack):
+class DynseqTrack(NumericalTrack, DynseqTrackConfig):
     """
     Dynseq-flavor sequence logo track. The implementation is built on the top of logomaker.
     After creating the track object, logo matrix should be assigned using :attr:`values`.
@@ -274,7 +391,9 @@ class DynseqTrack(NumericalTrack):
     def __init__(
         self, track: str = "", seq_fasta: str = "", is_nucleotide: bool = True, **kwargs
     ):
+        config = DynseqTrackConfig(is_nucleotide=is_nucleotide, **kwargs)
         super(DynseqTrack, self).__init__(**kwargs)
+        self.is_nucleotide = config.is_nucleotide
 
         self.bw = []
         if isinstance(track, str):
@@ -286,7 +405,7 @@ class DynseqTrack(NumericalTrack):
                 self.bw.append(pyBigWig.open(sub_track))
         check_accessibility(seq_fasta, allow_remote=False)
 
-        if is_nucleotide:
+        if self.is_nucleotide:
             self._voc = ("A", "C", "G", "T")
         else:
             self._voc = (
@@ -314,14 +433,14 @@ class DynseqTrack(NumericalTrack):
         self._values = None
         self.seq_fasta = Fasta(seq_fasta)
 
-        self.color_scheme = kwargs.get("color_scheme", None)
-        self.font_name = kwargs.get("font_name", "sans")
-        self.stack_order = kwargs.get("stack_order", "big_on_top")
-        self.center_values = kwargs.get("center_values", False)
-        self.flip_below = kwargs.get("flip_below", True)
-        self.shade_below = kwargs.get("shade_below", 0.0)
-        self.fade_below = kwargs.get("fade_below", 0.0)
-        self.fade_probabilities = kwargs.get("fade_probabilities", False)
+        self.color_scheme = config.color_scheme
+        self.font_name = config.font_name
+        self.stack_order = config.stack_order
+        self.center_values = config.center_values
+        self.flip_below = config.flip_below
+        self.shade_below = config.shade_below
+        self.fade_below = config.fade_below
+        self.fade_probabilities = config.fade_probabilities
 
     def _get(self, chromosome, start, end):
         xvalues = np.arange(start, end, step=1)

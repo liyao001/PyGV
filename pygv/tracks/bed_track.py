@@ -1,14 +1,65 @@
 import os
 import re
 from collections import namedtuple
-from typing import Any
+from typing import Any, ClassVar
 import numpy as np
 import pandas as pd
 from matplotlib import colors
 from matplotlib.collections import PatchCollection
+from matplotlib.colors import is_color_like
 from matplotlib.patches import Rectangle
+from pydantic import Field, field_validator
 
-from .track import AnnotationTrack, Track
+from .track import AnnotationTrack, AnnotationTrackConfig, Track
+
+
+class BedTrackConfig(AnnotationTrackConfig):
+    show_mode: str = Field(
+        default="expanded",
+        description="Display mode for BED features: 'expanded' or 'collapsed'.",
+    )
+    plot_thickness: bool = Field(
+        default=False, description="Whether to draw BED thickStart/thickEnd regions."
+    )
+    block_line_height: float = Field(
+        default=1, ge=0, description="Line height used when connecting BED blocks."
+    )
+
+    @field_validator("show_mode")
+    def _validate_show_mode(cls, value):
+        if value in {"expanded", "collapsed"}:
+            return value
+        raise ValueError("show_mode must be either expanded or collapsed")
+
+
+class BedPETrackConfig(AnnotationTrackConfig):
+    flip_arc: bool = Field(
+        default=False, alias="flip", description="Whether to flip interaction arcs."
+    )
+    highlight_links: object = Field(
+        default=(), description="Collection of interaction links to highlight."
+    )
+    highlight_link_color: object = Field(
+        default="#D62728", description="Matplotlib color used for highlighted links."
+    )
+    highlight_link_alpha: float = Field(
+        default=1.0, ge=0, le=1, description="Opacity for highlighted links."
+    )
+    highlight_link_line_width: float = Field(
+        default=1.5, ge=0, description="Line width for highlighted links."
+    )
+
+    @field_validator("highlight_link_color")
+    def _validate_highlight_link_color(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+
+class ConnectionArcTrackConfig(BedTrackConfig):
+    flip_arc: bool = Field(
+        default=False, alias="flip", description="Whether to flip connection arcs."
+    )
 
 
 class _LaneRegistry(object):
@@ -22,7 +73,7 @@ class _LaneRegistry(object):
         self.features = features
 
 
-class BedTrack(AnnotationTrack):
+class BedTrack(AnnotationTrack, BedTrackConfig):
     """
     If you're looking to visualize genomic features like genes and regulatory elements,
     you can utilize the :class:`~pygv.tracks.bed_track.BedTrack` in PyGV.
@@ -92,12 +143,13 @@ class BedTrack(AnnotationTrack):
             yield self._BedRecord._make(row)
 
     def __init__(self, track, **kwargs: Any):
+        is_bb = kwargs.pop("_is_bb", False)
+        plot_thickness_provided = "plot_thickness" in kwargs
+        plot_thickness_value = kwargs.get("plot_thickness")
         if "height" not in kwargs:
             kwargs["height"] = 0.8
         super(BedTrack, self).__init__(track, **kwargs)
-        is_bb = kwargs.pop("_is_bb", False)
         self._show_mode = ""
-        self.show_mode = kwargs.pop("show_mode", "expanded")
 
         self._plot_thickness = 0
         self._plot_block = 0
@@ -155,14 +207,13 @@ class BedTrack(AnnotationTrack):
 
             if n_fields >= 8:
                 self.plot_thickness = 1
-                if "plot_thickness" in kwargs:
-                    self.plot_thickness = kwargs.pop("plot_thickness")
+                if plot_thickness_provided:
+                    self.plot_thickness = plot_thickness_value
             if n_fields == 12:
                 self._plot_block = 1
         self._rgb_check = re.compile(r"(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})")
         self.small_relative = 0
         self._block_line_width = 0
-        self.block_line_height = kwargs.pop("block_line_height", 1)
 
         # override defaults
         if self.color is None:
@@ -668,7 +719,7 @@ class BedTrack(AnnotationTrack):
             # self.ax.margins(0)
 
 
-class BedPETrack(AnnotationTrack):
+class BedPETrack(AnnotationTrack, BedPETrackConfig):
     """
     If you're looking to visualize genomic interactions like proximity captured by Hi-C,
     you can utilize the :class:`~pygv.tracks.bed_track.BedPETrack` in PyGV.
@@ -705,6 +756,13 @@ class BedPETrack(AnnotationTrack):
     .. plot:: ../examples/plot_bedpe.py
     """
 
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **AnnotationTrack._FIELD_PRIVATE_ATTRS,
+        "highlight_link_color": "_highlight_link_color",
+        "highlight_link_alpha": "_highlight_link_alpha",
+        "highlight_link_line_width": "_highlight_link_line_width",
+    }
+
     def _get(self, chromosome, start, end):
         pass
 
@@ -731,6 +789,7 @@ class BedPETrack(AnnotationTrack):
             yield self._BedPERecord._make(row[: len(self._BedPERecord._fields)])
 
     def __init__(self, track, **kwargs: Any):
+        config = BedPETrackConfig(**kwargs)
         super(BedPETrack, self).__init__(track, **kwargs)
         if not os.path.exists(track):
             raise ValueError
@@ -786,14 +845,16 @@ class BedPETrack(AnnotationTrack):
         if self.edge_color is None:
             self.edge_color = "#6E6E6E"
 
-        self.flip_arc = kwargs.get("flip", False)
+        self.flip_arc = config.flip_arc
         self._highlight_links = set()
-        self._highlight_link_color = kwargs.get("highlight_link_color", "#D62728")
-        self._highlight_link_alpha = kwargs.get("highlight_link_alpha", 1.0)
-        self._highlight_link_line_width = kwargs.get(
-            "highlight_link_line_width", self.line_width * 1.5
+        self._highlight_link_color = config.highlight_link_color
+        self._highlight_link_alpha = config.highlight_link_alpha
+        self._highlight_link_line_width = (
+            config.highlight_link_line_width
+            if "highlight_link_line_width" in kwargs
+            else self.line_width * 1.5
         )
-        self.set_highlight_links(kwargs.get("highlight_links", ()))
+        self.set_highlight_links(config.highlight_links)
 
     @staticmethod
     def _normalize_link_coords(start1, end1, start2, end2, chromosome=None):
@@ -1016,7 +1077,7 @@ class BedPETrack(AnnotationTrack):
             self._ax.invert_yaxis()
 
 
-class ConnectionArcTrack(BedTrack):
+class ConnectionArcTrack(BedTrack, ConnectionArcTrackConfig):
     """
     Similar to :class:`~pygv.tracks.bed_track.BedPETrack`, :class:`~pygv.tracks.bed_track.ConnectionArcTrack`
     can be used to visualize genomic interactions like enhancer-promoter interaction.
@@ -1046,6 +1107,7 @@ class ConnectionArcTrack(BedTrack):
     """
 
     def __init__(self, track, **kwargs):
+        config = ConnectionArcTrackConfig(**kwargs)
         super(ConnectionArcTrack, self).__init__(track=track, **kwargs)
         if self.color is None:
             self.color = "#FFD900"
@@ -1055,7 +1117,7 @@ class ConnectionArcTrack(BedTrack):
         if not os.path.exists(track):
             raise IOError("File not found: {}".format(track))
 
-        self.flip_arc = kwargs.get("flip", False)
+        self.flip_arc = config.flip_arc
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
         """

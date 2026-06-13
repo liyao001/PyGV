@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:00.363** total execution time for 20 files **from all galleries**:
+**00:00.121** total execution time for 22 files **from all galleries**:
 
 .. container::
 
@@ -32,10 +32,13 @@ Computation times
    * - Example
      - Time
      - Mem (MB)
-   * - :ref:`sphx_glr_auto_examples_plot_overlaying_bigwigs.py` (``../examples/plot_overlaying_bigwigs.py``)
-     - 00:00.363
+   * - :ref:`sphx_glr_auto_examples_plot_bed.py` (``../examples/plot_bed.py``)
+     - 00:00.121
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_allowed_feature_lanes.py` (``../examples/plot_allowed_feature_lanes.py``)
+     - 00:00.000
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_axis_marks.py` (``../examples/plot_axis_marks.py``)
      - 00:00.000
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_bam_arc_reads.py` (``../examples/plot_bam_arc_reads.py``)
@@ -51,9 +54,6 @@ Computation times
      - 00:00.000
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_bam_stranded_coverage.py` (``../examples/plot_bam_stranded_coverage.py``)
-     - 00:00.000
-     - 0.0
-   * - :ref:`sphx_glr_auto_examples_plot_bed.py` (``../examples/plot_bed.py``)
      - 00:00.000
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_bedpe.py` (``../examples/plot_bedpe.py``)
@@ -77,6 +77,9 @@ Computation times
    * - :ref:`sphx_glr_auto_examples_plot_group_autoscale.py` (``../examples/plot_group_autoscale.py``)
      - 00:00.000
      - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_group_label.py` (``../examples/plot_group_label.py``)
+     - 00:00.000
+     - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_highlight_regions.py` (``../examples/plot_highlight_regions.py``)
      - 00:00.000
      - 0.0
@@ -84,6 +87,9 @@ Computation times
      - 00:00.000
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_logo.py` (``../examples/plot_logo.py``)
+     - 00:00.000
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_overlaying_bigwigs.py` (``../examples/plot_overlaying_bigwigs.py``)
      - 00:00.000
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_paired_strand_specific_bigwigs.py` (``../examples/plot_paired_strand_specific_bigwigs.py``)

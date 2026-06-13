@@ -1,16 +1,234 @@
 from abc import abstractmethod
-from typing import Any, Callable, Union
+from typing import Any, Callable, ClassVar, Dict, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import is_color_like
 from matplotlib.lines import Line2D
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pygv.errors.DataIntegrity import InvaildRegion
 from pygv.errors.Implementation import UnimplementedBinStat, UnimplementedTransformation
 
 
-class Track(object):
+class _ConfigModel(BaseModel):
+    model_config = ConfigDict(
+        arbitrary_types_allowed=True,
+        extra="forbid",
+        populate_by_name=True,
+        validate_assignment=True,
+    )
+
+    def __init__(self, **data: Any):
+        super().__init__(**self._populate_config_defaults(data))
+
+    @classmethod
+    def _populate_config_defaults(cls, data):
+        data = dict(data)
+        defaults = {}
+        for base in reversed(cls.mro()):
+            if (
+                isinstance(base, type)
+                and issubclass(base, _ConfigModel)
+                and base is not _ConfigModel
+                and base.__name__.endswith("Config")
+            ):
+                for name, field in base.model_fields.items():
+                    if field.is_required():
+                        continue
+                    alias = field.alias
+                    if name in data or (alias is not None and alias in data):
+                        continue
+                    defaults[name] = field.get_default(call_default_factory=True)
+        defaults.update(data)
+        return defaults
+
+
+class TrackConfig(_ConfigModel):
+    name: str = Field(default="", description="Track label shown on the y-axis.")
+    line_width: float = Field(
+        default=1, ge=0, description="Default line width for rendered track elements."
+    )
+    height: float = Field(
+        default=1, gt=0, description="Relative height of the track in the viewer layout."
+    )
+    color: Optional[Any] = Field(
+        default="#A1A1A1", description="Default Matplotlib color for track elements."
+    )
+    edge_color: Optional[Any] = Field(
+        default="#6E6E6E", description="Default Matplotlib edge color for track elements."
+    )
+    font_color: Optional[Any] = Field(
+        default="black", description="Matplotlib color used for track text."
+    )
+    alpha: float = Field(
+        default=0.8,
+        ge=0,
+        le=1,
+        description="Opacity for patches and filled visual elements.",
+    )
+    font_size: float = Field(
+        default_factory=lambda: plt.rcParams["font.size"],
+        gt=0,
+        description="Font size used for track labels and text.",
+    )
+    y_tick_format: Optional[str] = Field(
+        default=None, description="Format string used for y-axis tick labels."
+    )
+    y_label_rotation: Union[float, str] = Field(
+        default="horizontal",
+        description="Rotation of the y-axis label: 'horizontal', 'vertical', or a numeric angle.",
+    )
+    y_label_ha: str = Field(
+        default="right", description="Horizontal alignment for the y-axis label."
+    )
+    y_label_va: str = Field(
+        default="center", description="Vertical alignment for the y-axis label."
+    )
+    inward_yticks: bool = Field(
+        default=False, description="Adjust end y-tick labels inward to reduce overlap."
+    )
+
+    @field_validator("color", "edge_color", "font_color")
+    def _validate_color(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+    @field_validator("y_label_rotation")
+    def _validate_y_label_rotation(cls, value):
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        if value in {"vertical", "horizontal"}:
+            return value
+        raise ValueError(
+            "y_label_rotation must be 'vertical', 'horizontal', or a numeric angle."
+        )
+
+
+class AnnotationTrackConfig(TrackConfig):
+    patch_height: float = Field(
+        default=1, gt=0, description="Height of annotation patches such as exons or blocks."
+    )
+    allowed_feature_lanes: Optional[int] = Field(
+        default=None,
+        gt=0,
+        description="Maximum number of annotation lanes to draw; None allows all lanes.",
+    )
+    font_box_alpha: float = Field(
+        default=0.75,
+        ge=0,
+        le=1,
+        description="Opacity of text background boxes used for annotation labels.",
+    )
+    lane_space: float = Field(
+        default=0.25, ge=0, description="Extra vertical spacing between annotation lanes."
+    )
+    features_per_lane: int = Field(
+        default=3, gt=0, description="Maximum number of features grouped into each lane."
+    )
+    line_color: Optional[Any] = Field(
+        default="black", description="Matplotlib color used for annotation connector lines."
+    )
+    arrow_interval: float = Field(
+        default=5, gt=0, description="Spacing between strand direction arrows."
+    )
+    padding_left: float = Field(
+        default=0, ge=0, description="Extra left-side spacing used when placing features."
+    )
+    padding_right: float = Field(
+        default=0, ge=0, description="Extra right-side spacing used when placing features."
+    )
+    show_name: bool = Field(default=True, description="Whether to draw feature names.")
+    hide_visual_dup: bool = Field(
+        default=False,
+        description="Whether to hide visually duplicated features in the current view.",
+    )
+
+    @field_validator("line_color")
+    def _validate_line_color(cls, value):
+        if value is None or is_color_like(value):
+            return value
+        raise ValueError(f"Invalid color value: {value}")
+
+
+class NumericalTrackConfig(TrackConfig):
+    min_val: Optional[float] = Field(
+        default=None, description="Lower y-axis limit for numerical signals."
+    )
+    max_val: Optional[float] = Field(
+        default=None, description="Upper y-axis limit for numerical signals."
+    )
+    show_range: bool = Field(default=True, description="Whether to show y-axis range ticks.")
+    n_bins: Optional[int] = Field(
+        default=None, gt=0, description="Number of bins used to summarize numerical values."
+    )
+    stat_method: Optional[str] = Field(
+        default=None, description="Statistic used when summarizing values into bins."
+    )
+    data_transform: Optional[Union[str, Callable]] = Field(
+        default=None,
+        alias="transformation",
+        description="Transformation applied to numerical values before plotting.",
+    )
+    convert_nan_to_num: Optional[Callable] = Field(
+        default=np.nan_to_num,
+        description="Callable used to convert NaN values before plotting.",
+    )
+    scale: float = Field(
+        default=1, description="Multiplicative scaling factor applied to numerical values."
+    )
+    label_masked_peak: bool = Field(
+        default=True, description="Whether to label peaks clipped by min_val or max_val."
+    )
+    overflow_label_format: Optional[str] = Field(
+        default="{:.1f}", description="Format string used for clipped peak labels."
+    )
+    overflow_label_auto_adjust: bool = Field(
+        default=False,
+        description="Whether to automatically adjust clipped peak label placement.",
+    )
+
+    @field_validator("stat_method")
+    def _validate_stat_method(cls, value):
+        if value is None:
+            return value
+        np_supported_methods = {"mean", "std", "median", "count", "sum", "min", "max"}
+        if value in np_supported_methods:
+            return value
+        raise ValueError(f"Unsupported stat_method: {value}")
+
+    @field_validator("convert_nan_to_num")
+    def _validate_nan_converter(cls, value):
+        if value is None or callable(value):
+            return value
+        raise ValueError("convert_nan_to_num must be None or a callable object.")
+
+    @field_validator("data_transform")
+    def _validate_data_transform(cls, value):
+        if value is None or callable(value):
+            return value
+        supported_transformations = {
+            "ln",
+            "asinh",
+            "log2",
+            "log10",
+            "log1p",
+            "rln",
+            "rlog2",
+            "rlog10",
+            "rlog1p",
+        }
+        if value in supported_transformations:
+            return value
+        raise ValueError(str(UnimplementedTransformation(value)))
+
+
+class DynamicValueTrackConfig(NumericalTrackConfig):
+    values: Any = Field(default=None, description="Dynamic values to plot for the track.")
+
+
+class Track(TrackConfig):
     """
     Generic Track
 
@@ -49,41 +267,61 @@ class Track(object):
             Horizontal alignment about label for y-axis
     """
 
-    def __init__(self, **kwargs: Any):
-        # title of the track
-        self._name = None
-        self.name = kwargs.pop("name", "")
-        # line width
-        self._line_width = None
-        self.line_width = kwargs.get("line_width", 1)
-        # height
-        self._height = None
-        self.height = kwargs.pop("height", 1)
-        # color
-        self._color = "#A1A1A1"
-        self.color = kwargs.pop("color", "#A1A1A1")
-        self._edge_color = "#6E6E6E"
-        self.edge_color = kwargs.pop("edge_color", "#6E6E6E")
-        # alpha
-        self._alpha = None
-        self.alpha = kwargs.pop("alpha", 0.8)
-        # font color
-        self._font_color = "black"
-        self.font_color = kwargs.pop("font_color", "black")
-        # font size
-        self._font_size = plt.rcParams["font.size"]
-        self.font_size = kwargs.pop("font_size", plt.rcParams["font.size"])
+    _FIELD_PRIVATE_ATTRS: ClassVar[Dict[str, str]] = {
+        "name": "_name",
+        "line_width": "_line_width",
+        "height": "_height",
+        "color": "_color",
+        "edge_color": "_edge_color",
+        "font_color": "_font_color",
+        "alpha": "_alpha",
+        "font_size": "_font_size",
+        "y_tick_format": "_y_tick_format",
+        "y_label_rotation": "_y_label_rotation",
+        "y_label_ha": "_y_label_ha",
+        "y_label_va": "_y_label_va",
+        "inward_yticks": "_inward_yticks",
+    }
 
+    def __getattribute__(self, name):
+        private_attrs = object.__getattribute__(self, "_FIELD_PRIVATE_ATTRS")
+        private_name = private_attrs.get(name)
+        if private_name is not None:
+            values = object.__getattribute__(self, "__dict__")
+            if private_name in values:
+                return values[private_name]
+        return super().__getattribute__(name)
+
+    def __setattr__(self, name, value):
+        if name in type(self).model_fields:
+            super().__setattr__(name, value)
+            self._sync_private_field(name)
+        else:
+            object.__setattr__(self, name, value)
+
+    def _sync_private_field(self, name):
+        private_name = self._FIELD_PRIVATE_ATTRS.get(name)
+        if private_name is not None and name in self.__dict__:
+            object.__setattr__(self, private_name, self.__dict__[name])
+
+    def _sync_private_fields(self):
+        for name in self._FIELD_PRIVATE_ATTRS:
+            self._sync_private_field(name)
+
+    def dict(self, *args, **kwargs):
+        if kwargs.get("include") is None:
+            kwargs["include"] = set(type(self).model_fields)
+        return super().model_dump(*args, **kwargs)
+
+    def model_dump(self, *args, **kwargs):
+        if kwargs.get("include") is None:
+            kwargs["include"] = set(type(self).model_fields)
+        return super().model_dump(*args, **kwargs)
+
+    def __init__(self, **kwargs: Any):
+        super().__init__(**kwargs)
+        self._sync_private_fields()
         self._ax = None
-        self._y_tick_format = None
-        self.y_tick_format = kwargs.pop("y_tick_format", None)
-        self._y_label_rotation = "horizontal"
-        self.y_label_rotation = kwargs.pop("y_label_rotation", "horizontal")
-        self._y_label_ha = "right"
-        self.y_label_ha = kwargs.pop("y_label_ha", "right")
-        self._y_label_va = "center"
-        self.y_label_va = kwargs.pop("y_label_va", "center")
-        self._inward_yticks = False
 
         # highlight spans
         self._highlight_starts = []
@@ -297,7 +535,9 @@ class Track(object):
         """
         if self._font_size is None:
             self._font_size = plt.rcParams["font.size"]
-        self.inward_yticks = kwargs.pop("inward_ticks", False)
+        inward_ticks = kwargs.pop("inward_ticks", False)
+        if inward_ticks is not None:
+            self.inward_yticks = inward_ticks
 
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
         """
@@ -515,7 +755,7 @@ class Track(object):
                 self._ax.axvspan(s, e, color=c, alpha=a, linewidth=0, zorder=-1)
 
 
-class AnnotationTrack(Track):
+class AnnotationTrack(Track, AnnotationTrackConfig):
     """
     Annotation track
 
@@ -547,6 +787,28 @@ class AnnotationTrack(Track):
             :attr:`hide_visual_dup`
 
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[Dict[str, str]] = {
+        **Track._FIELD_PRIVATE_ATTRS,
+        "patch_height": "_patch_height",
+        "allowed_feature_lanes": "_allowed_feature_lanes",
+        "font_box_alpha": "_font_box_alpha",
+        "lane_space": "_lane_space",
+        "features_per_lane": "_features_per_lane",
+        "line_color": "_line_color",
+        "arrow_interval": "_arrow_interval",
+        "padding_left": "_padding_left",
+        "padding_right": "_padding_right",
+        "show_name": "_show_name",
+        "hide_visual_dup": "_hide_visual_dup",
+    }
+
+    def __getattribute__(self, name):
+        if name == "height":
+            values = object.__getattribute__(self, "__dict__")
+            if "_lane_registries" in values and "_height" in values:
+                return max(len(values["_lane_registries"]), 1) * values["_height"]
+        return super().__getattribute__(name)
 
     @property
     def patch_height(self):
@@ -724,29 +986,6 @@ class AnnotationTrack(Track):
             self.color = "#A1A1A1"
         if self.edge_color is None:
             self.edge_color = "#6E6E6E"
-        # plot behaviour
-        self._patch_height = 1
-        self.patch_height = kwargs.pop("patch_height", 1)
-        self._allowed_feature_lanes = None
-        self.allowed_feature_lanes = kwargs.pop("allowed_feature_lanes", None)
-        self._font_box_alpha = 0.75
-        self.font_box_alpha = kwargs.pop("font_box_alpha", 0.75)
-        self._lane_space = 0.25
-        self.lane_space = kwargs.pop("lane_space", 0.25)
-        self._features_per_lane = 3
-        self.features_per_lane = kwargs.pop("features_per_lane", 3)
-        self._line_color = "black"
-        self.line_color = kwargs.pop("line_color", "black")
-        self._arrow_interval = 5
-        self.arrow_interval = kwargs.pop("arrow_interval", 5)
-        self._padding_left = 0
-        self.padding_left = kwargs.pop("padding_left", 0)
-        self._padding_right = 0
-        self.padding_right = kwargs.pop("padding_right", 0)
-        self._show_name = True
-        self.show_name = kwargs.pop("show_name", True)
-        self._hide_visual_dup = False
-        self.hide_visual_dup = kwargs.pop("hide_visual_dup", False)
 
         # lane manager
         self._lane_registries = []
@@ -783,7 +1022,7 @@ class AnnotationTrack(Track):
         )
 
 
-class NumericalTrack(Track):
+class NumericalTrack(Track, NumericalTrackConfig):
     """
     Numerical track
 
@@ -801,6 +1040,61 @@ class NumericalTrack(Track):
         overflow_label_auto_adjust : bool
             Switch controlling the automatic placement of text labels for overflow signals
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[Dict[str, str]] = {
+        **Track._FIELD_PRIVATE_ATTRS,
+        "min_val": "_min_val",
+        "max_val": "_max_val",
+        "show_range": "_show_range",
+        "n_bins": "_n_bins",
+        "stat_method": "_stat_method",
+        "data_transform": "_data_transform",
+        "convert_nan_to_num": "_convert_nan_to_num",
+        "scale": "_scale",
+        "label_masked_peak": "_label_masked_peak",
+        "overflow_label_format": "_overflow_label_format",
+        "overflow_label_auto_adjust": "_overflow_label_auto_adjust",
+    }
+
+    def _sync_private_field(self, name):
+        if name == "data_transform":
+            object.__setattr__(
+                self,
+                "_data_transform",
+                self._resolve_data_transform(self.__dict__[name]),
+            )
+            return
+        if name == "convert_nan_to_num":
+            value = self.__dict__[name]
+            object.__setattr__(
+                self,
+                "_convert_nan_to_num",
+                self._echo if value is None else value,
+            )
+            return
+        super()._sync_private_field(name)
+
+    @staticmethod
+    def _resolve_data_transform(value):
+        if value is None:
+            return NumericalTrack._echo
+        if callable(value):
+            return value
+        transformations = {
+            "ln": np.log,
+            "asinh": np.arcsinh,
+            "log2": np.log2,
+            "log10": np.log10,
+            "log1p": np.log1p,
+            "rln": lambda x: -1 * np.log(-1 * x),
+            "rlog2": lambda x: -1 * np.log2(-1 * x),
+            "rlog10": lambda x: -1 * np.log10(-1 * x),
+            "rlog1p": lambda x: -1 * np.log1p(-1 * x),
+        }
+        try:
+            return transformations[value]
+        except KeyError:
+            raise UnimplementedTransformation(value)
 
     @abstractmethod
     def _get(self, chromosome, start, end):
@@ -1050,39 +1344,7 @@ class NumericalTrack(Track):
 
     def __init__(self, **kwargs):
         super(NumericalTrack, self).__init__(**kwargs)
-
-        # range
-        self._min_val = None
-        self.min_val = kwargs.pop("min_val", None)
-        self._max_val = None
-        self.max_val = kwargs.pop("max_val", None)
-        self._show_range = True
-        self.show_range = kwargs.pop("show_range", True)
-
-        # stats
-        self._n_bins = None
-        self.n_bins = kwargs.pop("n_bins", None)
-        self._stat_method = None
-        self.stat_method = kwargs.pop("stat_method", None)
-
-        # data transformation
-        self._data_transform = None
-        self.data_transform = kwargs.get("transformation", None)
-        self._convert_nan_to_num = None
-        self.convert_nan_to_num = kwargs.pop("convert_nan_to_num", np.nan_to_num)
-
-        self._scale = None
-        self.scale = kwargs.pop("scale", 1)
         self.is_real_number_track = 0
-
-        self._label_masked_peak = None
-        self.label_masked_peak = kwargs.pop("label_masked_peak", True)
-        self._overflow_label_format = None
-        self.overflow_label_format = kwargs.pop("overflow_label_format", "{:.1f}")
-        self._overflow_label_auto_adjust = None
-        self.overflow_label_auto_adjust = kwargs.pop(
-            "overflow_label_auto_adjust", False
-        )
         self._yscale_func = None
 
     @property
@@ -1339,7 +1601,7 @@ class NumericalTrack(Track):
         return keep_idx
 
 
-class DynamicValueTrack(NumericalTrack):
+class DynamicValueTrack(NumericalTrack, DynamicValueTrackConfig):
     """
     While other tracks load signal values from external files,
     DynamicValueTrack allows you to show the numerical values directly from your code.
@@ -1361,10 +1623,13 @@ class DynamicValueTrack(NumericalTrack):
     .. plot:: ../examples/plot_dyn_track.py
     """
 
+    _FIELD_PRIVATE_ATTRS: ClassVar[Dict[str, str]] = {
+        **NumericalTrack._FIELD_PRIVATE_ATTRS,
+        "values": "_values",
+    }
+
     def __init__(self, track: str = "", **kwargs):
         super(DynamicValueTrack, self).__init__(**kwargs)
-
-        self._values = None
 
     @property
     def values(self):
