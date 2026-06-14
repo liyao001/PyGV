@@ -35,13 +35,6 @@ class GtfTrackConfig(AnnotationTrackConfig):
 
 class GtfTrack(AnnotationTrack, GtfTrackConfig):
     """
-
-    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
-        **AnnotationTrack._FIELD_PRIVATE_ATTRS,
-        "filters": "_filters",
-        "show_genes": "show_gene",
-        "show_transcript_id": "_show_transcript_id",
-    }
     Gtf track
 
     Parameters
@@ -51,6 +44,13 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
         The same as :class:`pygv.tracks.track.AnnotationTrack`
 
     """
+
+    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
+        **AnnotationTrack._FIELD_PRIVATE_ATTRS,
+        "filters": "_filters",
+        "show_genes": "show_gene",
+        "show_transcript_id": "_show_transcript_id",
+    }
 
     def _get(self, chromosome, start, end):
         pass
@@ -287,8 +287,8 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         break
 
             if (
-                type(self._allowed_features) is int
-                and len(self._lane_registries) >= self._allowed_features
+                type(self.allowed_feature_lanes) is int
+                and len(self._lane_registries) >= self.allowed_feature_lanes
                 and active_lane is None
             ):
                 continue
