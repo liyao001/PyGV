@@ -1,326 +1,130 @@
-from abc import abstractmethod
-from typing import Any, Callable, Union
+from __future__ import annotations
+
+from typing import Any, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import is_color_like
 from matplotlib.lines import Line2D
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+)
 
 from pygv.errors.DataIntegrity import InvaildRegion
-from pygv.errors.Implementation import UnimplementedBinStat, UnimplementedTransformation
+from pygv.tracks.types import Alpha, Color, PositiveFloat
+
+TRACK_MODEL_CONFIG = ConfigDict(
+    arbitrary_types_allowed=True,
+    validate_assignment=True,
+    extra="forbid",
+    populate_by_name=True,
+)
 
 
-class Track(object):
-    """
-    Generic Track
+def _echo(data):
+    return data
 
-    Parameters
-    ----------
-    kwargs : dict
-        name : str
-            Name of the track
-        line_width : numeric
-            The default width for lines
-        height : int
-            Height of the track (unit, relative measurement)
-        color : color_like
-            Default color, #A1A1A1
-        edge_color : color_like
-            Edge color, #6E6E6E
-        font_color : color_like
-            Font color, black
-        alpha : float
-            Alpha of patches
-        font_size : float
-            Font size
-        y_tick_format : str
-            String format for ticks on y-axis. For example: `{:.1f}` (only keep one digit)
-        highlight_start : int
-            Start loc of highlight region
-        highlight_end : int
-            End loc of highlight region
-        highlight_color : color_like
-            Highlight color
-        highlight_alpha : float
-            Alpha for highlighting
-        y_label_rotation : str or float
-            Rotation of y-axis' label, by default, vertical.
-        y_label_ha : str
-            Horizontal alignment about label for y-axis
-    """
 
-    def __init__(self, **kwargs: Any):
-        # title of the track
-        self._name = None
-        self.name = kwargs.pop("name", "")
-        # line width
-        self._line_width = None
-        self.line_width = kwargs.get("line_width", 1)
-        # height
-        self._height = None
-        self.height = kwargs.pop("height", 1)
-        # color
-        self._color = "#A1A1A1"
-        self.color = kwargs.pop("color", "#A1A1A1")
-        self._edge_color = "#6E6E6E"
-        self.edge_color = kwargs.pop("edge_color", "#6E6E6E")
-        # alpha
-        self._alpha = None
-        self.alpha = kwargs.pop("alpha", 0.8)
-        # font color
-        self._font_color = "black"
-        self.font_color = kwargs.pop("font_color", "black")
-        # font size
-        self._font_size = plt.rcParams["font.size"]
-        self.font_size = kwargs.pop("font_size", plt.rcParams["font.size"])
+_TRANSFORMATIONS = {
+    "ln": np.log,
+    "asinh": np.arcsinh,
+    "log2": np.log2,
+    "log10": np.log10,
+    "log1p": np.log1p,
+    "rln": lambda x: -1 * np.log(-1 * x),
+    "rlog2": lambda x: -1 * np.log2(-1 * x),
+    "rlog10": lambda x: -1 * np.log10(-1 * x),
+    "rlog1p": lambda x: -1 * np.log1p(-1 * x),
+}
 
-        self._ax = None
-        self._y_tick_format = None
-        self.y_tick_format = kwargs.pop("y_tick_format", None)
-        self._y_label_rotation = "horizontal"
-        self.y_label_rotation = kwargs.pop("y_label_rotation", "horizontal")
-        self._y_label_ha = "right"
-        self.y_label_ha = kwargs.pop("y_label_ha", "right")
-        self._y_label_va = "center"
-        self.y_label_va = kwargs.pop("y_label_va", "center")
-        self._inward_yticks = False
+_BIN_STATS = {"mean", "std", "median", "count", "sum", "min", "max"}
 
-        # highlight spans
-        self._highlight_starts = []
-        self._highlight_ends = []
-        self._highlight_colors = []
-        self._highlight_alphas = []
 
-    @property
-    def alpha(self):
-        """
-        Alpha of patches
-        """
-        return self._alpha
+class Track(BaseModel):
+    """Generic track. Parameters are typed class fields for IDE autocomplete and validation."""
 
-    @alpha.setter
-    def alpha(self, value):
-        if 0 <= value <= 1:
-            self._alpha = value
-        else:
-            raise ValueError("alpha must be between 0 and 1")
+    model_config = TRACK_MODEL_CONFIG
 
-    @property
-    def name(self):
-        """
-        Name of the track
-        """
-        return self._name
+    name: str = Field(default="", kw_only=True, description="Name of the track")
+    line_width: float = Field(
+        default=1, kw_only=True, description="The default width for lines"
+    )
+    height: PositiveFloat = Field(
+        default=1,
+        kw_only=True,
+        description="Height of the track (unit, relative measurement)",
+    )
+    color: Color = Field(default="#A1A1A1", kw_only=True, description="Default color")
+    edge_color: Color = Field(
+        default="#6E6E6E", kw_only=True, description="Edge color"
+    )
+    alpha: Alpha = Field(default=0.8, kw_only=True, description="Alpha of patches")
+    font_color: Color = Field(default="black", kw_only=True, description="Font color")
+    font_size: Optional[float] = Field(
+        default_factory=lambda: plt.rcParams["font.size"],
+        kw_only=True,
+        description="Font size",
+    )
+    y_tick_format: Optional[str] = Field(
+        default=None,
+        kw_only=True,
+        description="String format for ticks on y-axis. For example: `{:.1f}`",
+    )
+    y_label_rotation: Union[str, float] = Field(
+        default="horizontal",
+        kw_only=True,
+        description="Rotation of y-axis' label",
+    )
+    y_label_ha: str = Field(
+        default="right",
+        kw_only=True,
+        description="Horizontal alignment about label for y-axis",
+    )
+    y_label_va: str = Field(
+        default="center",
+        kw_only=True,
+        description="Vertical alignment about label for y-axis",
+    )
+    hide_left_spine: bool = Field(
+        default=False,
+        kw_only=True,
+        description="Hide the left spine of the track axis",
+    )
+    inward_yticks: bool = Field(
+        default=False,
+        kw_only=True,
+        validation_alias=AliasChoices("inward_yticks", "inward_ticks"),
+        description=(
+            "Plot y-ticks strictly inside each track. "
+            "To apply this to all tracks, set inward_ticks=True on GenomeViewer."
+        ),
+    )
 
-    @name.setter
-    def name(self, value):
-        try:
-            self._name = str(value)
-        except:
-            pass
+    _ax: Any = PrivateAttr(default=None)
+    _highlight_starts: list = PrivateAttr(default_factory=list)
+    _highlight_ends: list = PrivateAttr(default_factory=list)
+    _highlight_colors: list = PrivateAttr(default_factory=list)
+    _highlight_alphas: list = PrivateAttr(default_factory=list)
 
-    @property
-    def color(self):
-        """
-        Default color
-        """
-        return self._color
-
-    @color.setter
-    def color(self, value):
-        try:
-            if is_color_like(value) or value is None:
-                self._color = str(value)
-            else:
-                print(f"Invalid color value: {value}")
-        except:
-            pass
-
-    @property
-    def edge_color(self):
-        """
-        Edge color
-        """
-        return self._edge_color
-
-    @edge_color.setter
-    def edge_color(self, value):
-        try:
-            if is_color_like(value) or value is None:
-                self._edge_color = str(value)
-            else:
-                print(f"Invalid color value: {value}")
-        except:
-            pass
-
-    @property
-    def font_color(self):
-        """
-        Font color
-        """
-        return self._font_color
-
-    @font_color.setter
-    def font_color(self, value):
-        try:
-            if is_color_like(value) or value is None:
-                self._font_color = value
-            else:
-                print(f"Invalid color value {value}")
-        except:
-            pass
-
-    @property
-    def font_size(self):
-        """
-        Font size
-        """
-        return self._font_size
-
-    @font_size.setter
-    def font_size(self, value):
-        try:
-            self._font_size = float(value)
-        except:
-            pass
-
-    @property
-    def line_width(self):
-        """
-        Line width
-        """
-        return self._line_width
-
-    @line_width.setter
-    def line_width(self, value):
-        try:
-            self._line_width = float(value)
-        except:
-            pass
-
-    @property
-    def height(self):
-        """
-        Height of the track (unit, relative measurement)
-        """
-        return self._height
-
-    @height.setter
-    def height(self, value):
-        if value > 0:
-            self._height = value
-        else:
-            raise ValueError("height must be greater than 0")
-
-    @property
-    def y_tick_format(self):
-        """
-        String format for ticks on y-axis
-        """
-        return self._y_tick_format
-
-    @y_tick_format.setter
-    def y_tick_format(self, value):
-        self._y_tick_format = value
-
-    @property
-    def y_label_rotation(self):
-        """
-        Rotation of y-axis' label, by default, vertical.
-        """
-        return self._y_label_rotation
-
-    @y_label_rotation.setter
-    def y_label_rotation(self, value):
-        self._y_label_rotation = value
-
-    @property
-    def y_label_ha(self):
-        """
-        Set the horizontal alignment
-        """
-        return self._y_label_ha
-
-    @y_label_ha.setter
-    def y_label_ha(self, value):
-        self._y_label_ha = value
-
-    @property
-    def y_label_va(self):
-        """
-        Set the vertical alignment
-        """
-        return self._y_label_va
-
-    @y_label_va.setter
-    def y_label_va(self, value):
-        self._y_label_va = value
-
-    @property
-    def inward_yticks(self):
-        """
-        Plot y-ticks strictly inside each track.
-        If you want to apply inward_yticks to all tracks,
-        you can set `inward_yticks=True` when creating the `GenomeViewer`,
-        like `GenomeViewer(inward_yticks=True)`
-
-        Examples
-        --------
-
-        .. plot:: ../examples/plot_inward_yticks.py
-        """
-        return self._inward_yticks
-
-    @inward_yticks.setter
-    def inward_yticks(self, value):
-        if value is not None:
-            self._inward_yticks = bool(value)
+    def layout_height(self) -> float:
+        """Height used by GenomeViewer when allocating subplot space."""
+        return self.height
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
-        """
-        This method will be called before calling the :func:`~pygv.tracks.track.Track.draw_track` method.
-        For now, it sets the default font size
-
-        Parameters
-        ----------
-        chromosome : str
-            chromosome
-        start : int
-            start of the ROI, 0-based
-        end : int
-            end of the ROI, 0-based
-        kwargs
-
-        Returns
-        -------
-
-        """
-        if self._font_size is None:
-            self._font_size = plt.rcParams["font.size"]
-        self.inward_yticks = kwargs.pop("inward_ticks", False)
+        """Called before :func:`~pygv.tracks.track.Track._draw_track`."""
+        if self.font_size is None:
+            self.font_size = plt.rcParams["font.size"]
+        inward = kwargs.get("inward_ticks", kwargs.get("inward_yticks", None))
+        if inward is not None:
+            self.inward_yticks = inward
 
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
-        """
-        Draw track
-
-        Parameters
-        ----------
-        chromosome : str
-            chromosome
-        start : int
-            start of the ROI, 0-based
-        end : int
-            end of the ROI, 0-based
-        ax : matplotlib.axes.Axes
-            matplotlib.axes.Axes to plot
-        index : int
-            The first subplot (track), index==0, will have its top border and xticks shown up
-        kwargs :
-
-        Returns
-        -------
-
-        """
+        """Draw track chrome (axis limits, spines, coordinate labels)."""
         self._ax = ax
         n_ticks = kwargs.get("n_ticks", None)
         hide_coords = kwargs.get("hide_coordinates", False)
@@ -329,14 +133,21 @@ class Track(object):
             self._ax.set_xlim((start, end))
         else:
             raise InvaildRegion("start of the region must be smaller than the end")
-        if index != 0 or hide_coords:
+        if index != 0:
             self._ax.spines["top"].set_visible(False)
-            # remove major ticks
             self._ax.set_xticks([])
-            # remove minor ticks
             self._ax.set_xticks([], minor=True)
+        elif hide_coords:
+            self._ax.spines["top"].set_visible(False)
+            self._ax.tick_params(
+                axis="x",
+                which="both",
+                top=False,
+                bottom=False,
+                labeltop=False,
+                labelbottom=False,
+            )
         else:
-            # plot coordinates
             self._ax.xaxis.set_ticks_position("top")
             self._ax.spines["top"].set_position(("outward", 10))
             self._ax.spines["top"].set_linewidth(2)
@@ -346,18 +157,13 @@ class Track(object):
                 ticks = [t for t in self._ax.get_xticks() if start <= t <= end]
 
             if ticks[-1] - ticks[1] <= 1e3:
-                labels = [f"{x:,.0f}"
-                          for x in ticks]
+                labels = [f"{x:,.0f}" for x in ticks]
                 labels[-1] += " bp"
-
             elif ticks[-1] - ticks[1] <= 4e5:
-                labels = [f"{x / 1000.0:,.0f}"
-                          for x in ticks]
+                labels = [f"{x / 1000.0:,.0f}" for x in ticks]
                 labels[-1] += " Kb"
-
             else:
-                labels = [f"{x / 1000000.0:,.1f} "
-                          for x in ticks]
+                labels = [f"{x / 1000000.0:,.1f} " for x in ticks]
                 labels[-1] += " Mbp"
 
             if not hide_chr_name:
@@ -368,6 +174,9 @@ class Track(object):
         self._ax.spines["bottom"].set_visible(False)
         self._ax.spines["right"].set_visible(False)
 
+        if self.hide_left_spine:
+            self._ax.spines["left"].set_visible(False)
+
         if self.name is not None:
             self._ax.set_ylabel(
                 self.name,
@@ -377,132 +186,66 @@ class Track(object):
             )
 
     def set_highlight_regions(self, starts, ends, colors=(), alpha_vals=()):
-        """
-        Set highlight region
-
-        Parameters
-        ----------
-        starts : list of numeric values
-            Start positions of the highlight zones
-        ends : list of numeric values
-            End positions of the highlight zones
-        colors : tuple
-            Leave it as an empty tuple if you want to use the default color.
-            If you only give one color, it will be applied to all regions; otherwise, you should specify
-            colors for each region.
-        alpha_vals : tuple
-            Leave it as an empty tuple if you want to use the default transparency level (0.5).
-            If you only give one value, it will be applied to all regions; otherwise, you should specify
-            transparency values for each region.
-
-        Returns
-        -------
-
-        """
-        try:
-            if isinstance(starts, int) or isinstance(starts, float):
-                starts = [
-                    starts,
-                ]
-            if isinstance(ends, int) or isinstance(ends, float):
-                ends = [
-                    ends,
-                ]
-            n_starts = len(starts)
-            n_ends = len(ends)
-            if n_starts != n_ends:
-                raise ValueError(
-                    "The number of start positions must be equal to the number of end positions."
-                )
-            if isinstance(colors, str):
-                colors = (colors,)
-            if not all(map(is_color_like, colors)):
-                raise ValueError("invalid color value(s).")
-            n_colors = len(colors)
-            if n_colors == 0:
-                self._highlight_colors = ("#FFFC66",) * n_starts
-            elif n_colors == 1:
-                self._highlight_colors = colors * n_starts
-            elif n_colors == n_starts:
-                self._highlight_colors = colors
-            else:
-                raise ValueError(
-                    "You need to provide either no, one, or colors for each region."
-                )
-            n_alpha = len(alpha_vals)
-            if n_alpha == 0:
-                self._highlight_alphas = (0.5,) * n_starts
-            elif n_alpha == 1:
-                self._highlight_alphas = alpha_vals * n_starts
-            elif n_alpha == n_starts:
-                self._highlight_alphas = alpha_vals
-            else:
-                raise ValueError(
-                    "You need to provide either no, one, or alpha values for each region."
-                )
-            self._highlight_starts = starts
-            self._highlight_ends = ends
-        except:
-            pass
+        """Set highlight regions."""
+        if isinstance(starts, int) or isinstance(starts, float):
+            starts = [starts]
+        if isinstance(ends, int) or isinstance(ends, float):
+            ends = [ends]
+        n_starts = len(starts)
+        n_ends = len(ends)
+        if n_starts != n_ends:
+            raise ValueError(
+                "The number of start positions must be equal to the number of end positions."
+            )
+        if isinstance(colors, str):
+            colors = (colors,)
+        if not all(map(is_color_like, colors)):
+            raise ValueError("invalid color value(s).")
+        n_colors = len(colors)
+        if n_colors == 0:
+            self._highlight_colors = ("#FFFC66",) * n_starts
+        elif n_colors == 1:
+            self._highlight_colors = colors * n_starts
+        elif n_colors == n_starts:
+            self._highlight_colors = colors
+        else:
+            raise ValueError(
+                "You need to provide either no, one, or colors for each region."
+            )
+        n_alpha = len(alpha_vals)
+        if n_alpha == 0:
+            self._highlight_alphas = (0.5,) * n_starts
+        elif n_alpha == 1:
+            self._highlight_alphas = alpha_vals * n_starts
+        elif n_alpha == n_starts:
+            self._highlight_alphas = alpha_vals
+        else:
+            raise ValueError(
+                "You need to provide either no, one, or alpha values for each region."
+            )
+        self._highlight_starts = starts
+        self._highlight_ends = ends
 
     def add_highlight_region(self, start, end):
-        """
-        Set highlight region
-
-        Parameters
-        ----------
-        start : numeric
-            Start position of the highlight zone
-        end : numeric
-            End position of the highlight zone
-
-        Returns
-        -------
-
-        """
-        try:
-            start = float(start)
-            end = float(end)
-            self._highlight_starts.append(start)
-            self._highlight_ends.append(end)
-        except:
-            pass
+        """Add one highlight region."""
+        self._highlight_starts.append(float(start))
+        self._highlight_ends.append(float(end))
+        colors = list(self._highlight_colors)
+        alphas = list(self._highlight_alphas)
+        colors.append("#FFFC66")
+        alphas.append(0.5)
+        self._highlight_colors = colors
+        self._highlight_alphas = alphas
 
     def remove_highlight(self):
-        """
-        Remove highlight zone
-
-        Returns
-        -------
-
-        """
+        """Remove highlight zones."""
         self._highlight_starts = []
         self._highlight_ends = []
+        self._highlight_colors = []
+        self._highlight_alphas = []
 
     def _post_plot_hook(self, chromosome, start, end, ax, index=1, **kwargs):
-        """
-        The hook is called after :func:`~pygv.tracks.track.Track.draw_track` method,
-        the method here checks highlight settings and if there's any,
-        they will be highlighted with highlight_color and highlight_alpha
-
-        Parameters
-        ----------
-        chromosome : str
-            chromosome
-        start : int
-            start of the ROI, 0-based
-        end : int
-            end of the ROI, 0-based
-        ax : matplotlib.axes.Axes
-            matplotlib.axes.Axes to plot
-        index : int
-            The first subplot (track), index==0, will have its top border and xticks shown up
-        kwargs :
-
-        Returns
-        -------
-
-        """
+        """Draw highlight spans after the track is drawn."""
         n_starts = len(self._highlight_starts)
         n_ends = len(self._highlight_ends)
         if n_starts == n_ends and n_starts > 0:
@@ -516,251 +259,77 @@ class Track(object):
 
 
 class AnnotationTrack(Track):
-    """
-    Annotation track
+    """Annotation track for interval features such as genes and peaks."""
 
-    Parameters
-    ----------
-    track : str
-    kwargs : dict
-        allowed_feature_lanes : None or int
-            :attr:`allowed_feature_lanes`
-        height : float
-            :attr:`height`
-        arrow_interval :
-            :attr:`arrow_interval`
-        features_per_lane : int
-            :attr:`features_per_lane`
-        font_box_alpha : float
-            :attr:`font_box_alpha`
-        lane_space : float
-            :attr:`lane_space`
-        line_color :
-            :attr:`line_color`
-        padding_left : int
-            :attr:`padding_left`
-        padding_right : int
-            :attr:`padding_right`
-        patch_height : int
-            :attr:`patch_height`
-        hide_visual_dup : bool
-            :attr:`hide_visual_dup`
+    track: str = Field(description="Path to the annotation file")
+    patch_height: float = Field(
+        default=1, kw_only=True, description="Height of patches (for exons/blocks)"
+    )
+    allowed_feature_lanes: Optional[int] = Field(
+        default=None,
+        kw_only=True,
+        description=(
+            "Max amount of feature lanes to be plotted. For example, if a region has "
+            "12 overlapping features, they will be plotted into 12 separate lanes. "
+            "If you set this to 2, only two lanes will be shown."
+        ),
+    )
+    font_box_alpha: Alpha = Field(
+        default=0.75,
+        kw_only=True,
+        description="Transparent/alpha for text boxes labeling gene names",
+    )
+    lane_space: float = Field(
+        default=0.25, kw_only=True, description="Extra spaces between lanes"
+    )
+    features_per_lane: int = Field(
+        default=3, kw_only=True, description="Features per lane"
+    )
+    line_color: Color = Field(
+        default="black", kw_only=True, description="Line color"
+    )
+    arrow_interval: float = Field(
+        default=5, kw_only=True, description="Intervals between arrows"
+    )
+    padding_left: float = Field(
+        default=0,
+        kw_only=True,
+        description=(
+            "Extra left padding so feature names do not overlap. An integer is a "
+            "base-pair distance; a float between 0 and 1 is a fraction of the window."
+        ),
+    )
+    padding_right: float = Field(
+        default=0,
+        kw_only=True,
+        description="Extra right padding for feature labels",
+    )
+    show_name: bool = Field(
+        default=True,
+        kw_only=True,
+        description="Print names of genomic regions if available",
+    )
+    hide_visual_dup: bool = Field(
+        default=False,
+        kw_only=True,
+        description=(
+            "Hide features which are duplicates of other features in the current window"
+        ),
+    )
 
-    """
+    _plot_thickness: int = PrivateAttr(default=0)
+    _plot_block: int = PrivateAttr(default=0)
+    _small_relative: float = PrivateAttr(default=0)
+    _lane_registries: list = PrivateAttr(default_factory=list)
 
-    @property
-    def patch_height(self):
-        """
-        Height of patches (for exons/blocks)
-        """
-        return self._patch_height
+    def __init__(self, track: str, **data: Any) -> None:
+        super().__init__(track=track, **data)
 
-    @patch_height.setter
-    def patch_height(self, value):
-        try:
-            self._patch_height = float(value)
-        except:
-            pass
-
-    @property
-    def allowed_feature_lanes(self):
-        """
-        Max amount of feature lanes to be plotted. For example, if a region has 12 overlapping features,
-        to make sure all features can be clearly rendered, these features will be plotted into 12 separate lanes.
-        If you set the value to be smaller than 12 (say `2`), then you will only see two lanes in the end.
-
-        Examples
-        --------
-
-        .. plot:: ../examples/plot_allowed_feature_lanes.py
-        """
-        return self._allowed_feature_lanes
-
-    @allowed_feature_lanes.setter
-    def allowed_feature_lanes(self, value):
-        try:
-            if value is None:
-                self._allowed_feature_lanes = None
-            else:
-                self._allowed_feature_lanes = int(value)
-        except:
-            pass
-
-    @property
-    def font_box_alpha(self):
-        """
-        Transparent/alpha for text boxes labeling gene names
-        """
-        return self._font_box_alpha
-
-    @font_box_alpha.setter
-    def font_box_alpha(self, value):
-        try:
-            self._font_box_alpha = float(value)
-        except:
-            pass
-
-    @property
-    def lane_space(self):
-        """
-        Extra spaces between lanes
-        """
-        return self._lane_space
-
-    @lane_space.setter
-    def lane_space(self, value):
-        try:
-            self._lane_space = float(value)
-        except:
-            pass
-
-    @property
-    def features_per_lane(self):
-        """
-        Features per lane
-        """
-        return self._features_per_lane
-
-    @features_per_lane.setter
-    def features_per_lane(self, value):
-        try:
-            self._features_per_lane = int(value)
-        except:
-            pass
-
-    @property
-    def line_color(self):
-        """
-        Line color
-        """
-        return self._line_color
-
-    @line_color.setter
-    def line_color(self, value):
-        try:
-            self._line_color = value
-        except:
-            pass
-
-    @property
-    def arrow_interval(self):
-        """
-        Intervals between arrows
-        """
-        return self._arrow_interval
-
-    @arrow_interval.setter
-    def arrow_interval(self, value):
-        try:
-            self._arrow_interval = float(value)
-        except:
-            pass
-
-    @property
-    def padding_left(self):
-        """
-        To ensure that feature names do not overlap with one another, you can introduce additional
-        padding spaces on the left side of each feature. When setting an integer value (let's call
-        it :math:`x`) for this property, features will be placed in separate lanes if the distance between
-        them is less than x. Alternatively, if you opt for a float value between 0 and 1 (designated as :math:`f`),
-        the required spacing will be a fraction of the current visible region's length (denoted as :math:`l`),
-        making the final spacing requirement equal to :math:`l\\times f`.
-        """
-        return self._padding_left
-
-    @padding_left.setter
-    def padding_left(self, value):
-        try:
-            self._padding_left = float(value)
-        except:
-            pass
-
-    @property
-    def show_name(self):
-        """
-        By default, PyGV prints the names of genomic regions if available.
-        This behavior can be changed by assigning :code:`False` to this property.
-        """
-        return self._show_name
-
-    @show_name.setter
-    def show_name(self, value):
-        try:
-            self._show_name = bool(value)
-        except:
-            pass
-
-    @property
-    def hide_visual_dup(self):
-        """
-        Hide features which are "duplicates" to other features in current window (only one will be kept)
-        """
-        return self._hide_visual_dup
-
-    @hide_visual_dup.setter
-    def hide_visual_dup(self, value):
-        try:
-            self._hide_visual_dup = bool(value)
-        except:
-            pass
-
-    @property
-    def height(self):
-        return max(len(self._lane_registries), 1) * self._height
-
-    @height.setter
-    def height(self, value):
-        self._height = value
-
-    def __init__(self, track, **kwargs):
-        super(AnnotationTrack, self).__init__(**kwargs)
-
-        self._plot_thickness = 0
-        self._plot_block = 0
-        self._small_relative = 0
-
-        # override defaults
-        if self.color is None:
-            self.color = "#A1A1A1"
-        if self.edge_color is None:
-            self.edge_color = "#6E6E6E"
-        # plot behaviour
-        self._patch_height = 1
-        self.patch_height = kwargs.pop("patch_height", 1)
-        self._allowed_feature_lanes = None
-        self.allowed_feature_lanes = kwargs.pop("allowed_feature_lanes", None)
-        self._font_box_alpha = 0.75
-        self.font_box_alpha = kwargs.pop("font_box_alpha", 0.75)
-        self._lane_space = 0.25
-        self.lane_space = kwargs.pop("lane_space", 0.25)
-        self._features_per_lane = 3
-        self.features_per_lane = kwargs.pop("features_per_lane", 3)
-        self._line_color = "black"
-        self.line_color = kwargs.pop("line_color", "black")
-        self._arrow_interval = 5
-        self.arrow_interval = kwargs.pop("arrow_interval", 5)
-        self._padding_left = 0
-        self.padding_left = kwargs.pop("padding_left", 0)
-        self._padding_right = 0
-        self.padding_right = kwargs.pop("padding_right", 0)
-        self._show_name = True
-        self.show_name = kwargs.pop("show_name", True)
-        self._hide_visual_dup = False
-        self.hide_visual_dup = kwargs.pop("hide_visual_dup", False)
-
-        # lane manager
-        self._lane_registries = []
+    def layout_height(self) -> float:
+        return max(len(self._lane_registries), 1) * self.height
 
     def _plot_gene_direction(self, ax, xpos, ypos, strand, **kwargs):
-        """
-        Draws a broken line with 2 parts:
-        For strand = +:  > For strand = -: <
-        :param xpos:
-        :param ypos:
-        :param strand:
-        :
-        :return: None
-        """
+        """Draw a broken line indicating strand: `>` for `+`, `<` for `-`."""
         if strand == ".":
             return
 
@@ -779,63 +348,147 @@ class AnnotationTrack(Track):
 
         ydata = [ypos - 1 / 5, ypos, ypos + 1 / 5]
         ax.add_line(
-            Line2D(xdata, ydata, color=self._line_color, linewidth=self.line_width)
+            Line2D(xdata, ydata, color=self.line_color, linewidth=self.line_width)
         )
 
 
 class NumericalTrack(Track):
-    """
-    Numerical track
+    """Numerical track for continuous signals."""
 
-    Parameters
-    ----------
-    kwargs : dict
-        max_val : int, optional
-            Maximum value to be plotted. By default, all signals are plotted.
-        min_val : int, optional
-            Minimum value to be plotted. By default, all signals are plotted.
-        label_masked_peak : bool
-            Whether or not to labelled capped signals.
-        overflow_label_format : str
-            String format for labeling overflow loci
-        overflow_label_auto_adjust : bool
-            Switch controlling the automatic placement of text labels for overflow signals
-    """
+    min_val: Optional[float] = Field(
+        default=None,
+        kw_only=True,
+        description="Minimum value to be plotted. By default, all signals are plotted.",
+    )
+    max_val: Optional[float] = Field(
+        default=None,
+        kw_only=True,
+        description="Maximum value to be plotted. By default, all signals are plotted.",
+    )
+    show_range: bool = Field(
+        default=True, kw_only=True, description="Whether to show y-axis range ticks"
+    )
+    n_bins: Optional[int] = Field(
+        default=None,
+        kw_only=True,
+        description=(
+            "Number of bins to apply. If a positive number is set, the window will "
+            "be separated in bins and stat_method will be applied."
+        ),
+    )
+    stat_method: Optional[str] = Field(
+        default=None,
+        kw_only=True,
+        description="Statistical method for binning windows",
+    )
+    data_transform: Any = Field(
+        default=None,
+        kw_only=True,
+        validate_default=True,
+        validation_alias=AliasChoices("data_transform", "transformation"),
+        description=(
+            "Function for data transformation. None, a named transform "
+            "(`asinh`, `ln`, `log2`, `log10`, `log1p`, or `r`-prefixed variants), "
+            "or a callable."
+        ),
+    )
+    convert_nan_to_num: Any = Field(
+        default=np.nan_to_num,
+        kw_only=True,
+        validate_default=True,
+        description="Function mapping NaN values. None leaves values unchanged.",
+    )
+    scale: float = Field(
+        default=1,
+        kw_only=True,
+        description="Normalization factor for signals (e.g. RPM)",
+    )
+    label_masked_peak: bool = Field(
+        default=True,
+        kw_only=True,
+        description="Whether to label capped overflow signals",
+    )
+    overflow_label_format: Optional[str] = Field(
+        default="{:.1f}",
+        kw_only=True,
+        description="String format for labeling overflow loci",
+    )
+    overflow_label_auto_adjust: bool = Field(
+        default=False,
+        kw_only=True,
+        description="Automatically place text labels for overflow signals",
+    )
+    equal_space_for_pos_neg_ranges: bool = Field(
+        default=False,
+        kw_only=True,
+        validation_alias=AliasChoices(
+            "equal_space_for_pos_neg_ranges", "draw_y_independently"
+        ),
+        description="Force positive and negative y-ranges to occupy equal space",
+    )
+    skip_label_for_zero: bool = Field(default=False, kw_only=True)
 
-    @abstractmethod
+    _yscale_func: Any = PrivateAttr(default=None)
+    _is_real_number_track: int = PrivateAttr(default=0)
+
+    @field_validator("stat_method")
+    @classmethod
+    def _validate_stat_method(cls, value):
+        if value is None:
+            return value
+        if value not in _BIN_STATS:
+            raise ValueError(f"Unsupported bin statistic: {value}")
+        return value
+
+    @field_validator("data_transform", mode="before")
+    @classmethod
+    def _coerce_data_transform(cls, value):
+        if value is None:
+            return _echo
+        if isinstance(value, str):
+            if value in _TRANSFORMATIONS:
+                return _TRANSFORMATIONS[value]
+            raise ValueError(f"Transformation is not supported ({value})")
+        if callable(value):
+            return value
+        raise ValueError(f"Transformation is not supported ({value})")
+
+    @field_validator("convert_nan_to_num", mode="before")
+    @classmethod
+    def _coerce_nan_converter(cls, value):
+        if value is None:
+            return _echo
+        if callable(value):
+            return value
+        raise ValueError(
+            "value of convert_nan_to_num must be None or a callable object."
+        )
+
     def _get(self, chromosome, start, end):
-        pass
+        raise NotImplementedError
 
     @staticmethod
     def _echo(data):
-        return data
+        return _echo(data)
+
+    def reset_min_val(self):
+        """Remove constraints for min value."""
+        self.min_val = None
+
+    def reset_max_val(self):
+        """Remove constraints for max value."""
+        self.max_val = None
 
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
-        super(NumericalTrack, self)._draw_track(
-            chromosome, start, end, ax, index=index, **kwargs
-        )
+        super()._draw_track(chromosome, start, end, ax, index=index, **kwargs)
         if index != 0:
-            # remove major ticks
             self._ax.set_xticks([])
-            # remove minor ticks
             self._ax.set_xticks([], minor=True)
         else:
             ax.xaxis.tick_top()
         self._ax.margins(0)
 
     def _get_scale(self, a=1):
-        """
-        Source: https://stackoverflow.com/questions/53699677/matplotlib-different-scale-on-negative-side-of-the-axis
-
-        Parameters
-        ----------
-        a
-
-        Returns
-        -------
-
-        """
-
         def forward(x):
             x = (x >= 0) * x + (x < 0) * x * a
             return x
@@ -847,40 +500,18 @@ class NumericalTrack(Track):
         return forward, inverse
 
     def _post_plot_hook(self, chromosome, start, end, ax, index=1, **kwargs):
-        """
-        Post-plot hooks
-
-        Parameters
-        ----------
-        chromosome : str
-            chromosome
-        start : int
-
-        end : int
-
-        ax : matplotlib.axes.Axes
-
-        index : int
-            The first subplot (track), index==0, will have its top border and xticks shown up
-        kwargs
-
-        Returns
-        -------
-
-        """
-        super(NumericalTrack, self)._post_plot_hook(
+        super()._post_plot_hook(
             chromosome=chromosome, start=start, end=end, ax=ax, index=index, **kwargs
         )
         y_start, y_end = self._ax.get_ylim()
-        if self._min_val is not None:
-            y_start = self._min_val
-        if self._max_val is not None:
-            y_end = self._max_val
+        if self.min_val is not None:
+            y_start = self.min_val
+        if self.max_val is not None:
+            y_end = self.max_val
 
-        if self.is_real_number_track:
+        if self._is_real_number_track:
             if y_start < 0:
                 if self.equal_space_for_pos_neg_ranges:
-                    # only apply scale adjustment when there are both positive and negative data values
                     if y_end > 0:
                         forward, inverse = self._get_scale(np.abs(y_end / y_start))
                         self._yscale_func = (forward, inverse)
@@ -898,30 +529,28 @@ class NumericalTrack(Track):
         else:
             self._ax.yaxis.set_ticks([])
 
-        if self._y_tick_format is not None:
+        if self.y_tick_format is not None:
             ticks = self._ax.get_yticks()
             new_labels = [
-                self._y_tick_format.format(label) for label in self._ax.get_yticks()
+                self.y_tick_format.format(label) for label in self._ax.get_yticks()
             ]
             self._ax.set_yticks(ticks)
             self._ax.set_yticklabels(new_labels)
 
         if self.inward_yticks:
-            # adjust the placements of the first and last ytick to avoid overlap
             y_ticks = self._ax.get_yticklabels()
             if len(y_ticks) > 1:
                 y_ticks[0].set_verticalalignment("bottom")
                 y_ticks[-1].set_verticalalignment("top")
 
-        # add bars to show overflowed signals
         distance_cutoff = max(0.01 * end - start, 1)
-        if self._max_val is not None or self._min_val is not None:
+        if self.max_val is not None or self.min_val is not None:
             for line in self._ax.get_lines():
                 t = line.get_xydata()
                 x = t[:, 0]
                 y = t[:, 1]
-                if self._max_val is not None:
-                    to_be_masked = np.logical_and(y > self._max_val, y > y_end)
+                if self.max_val is not None:
+                    to_be_masked = np.logical_and(y > self.max_val, y > y_end)
                     n_to_be_masked = to_be_masked.sum()
                     if n_to_be_masked > 0:
                         self._ax.scatter(
@@ -935,15 +564,11 @@ class NumericalTrack(Track):
                     if self.label_masked_peak:
                         from scipy.signal import find_peaks
 
-                        # find peaks in signal tracks which are higher than the threshold
-                        # then add annotation to show their values
-                        # require the distance between peaks to be away from their neighbours
-                        # for at least 1% of the overall window
                         if distance_cutoff >= 1:
                             peaks, _ = find_peaks(
                                 y,
                                 rel_height=1,
-                                height=self._max_val,
+                                height=self.max_val,
                                 distance=distance_cutoff,
                             )
                             texts = []
@@ -951,15 +576,15 @@ class NumericalTrack(Track):
                             for i, _x in enumerate(peaks):
                                 X = x[_x]
                                 Y = y[_x]
-                                if self._overflow_label_format is not None:
-                                    s = self._overflow_label_format.format(Y)
+                                if self.overflow_label_format is not None:
+                                    s = self.overflow_label_format.format(Y)
                                 else:
                                     s = "{:.2f}".format(Y)
-                                if not self._overflow_label_auto_adjust:
+                                if not self.overflow_label_auto_adjust:
                                     texts.append(
                                         self._ax.text(
                                             X,
-                                            self._max_val,
+                                            self.max_val,
                                             s,
                                             va="bottom",
                                             ha=ha_choices[i % 2],
@@ -967,9 +592,9 @@ class NumericalTrack(Track):
                                     )
                                 else:
                                     texts.append(
-                                        self._ax.text(X, self._max_val, s, va="bottom")
+                                        self._ax.text(X, self.max_val, s, va="bottom")
                                     )
-                            if self._overflow_label_auto_adjust and len(texts) > 0:
+                            if self.overflow_label_auto_adjust and len(texts) > 0:
                                 try:
                                     from adjustText import adjust_text
 
@@ -977,8 +602,8 @@ class NumericalTrack(Track):
                                 except ImportError:
                                     pass
 
-                if self._min_val is not None:
-                    to_be_masked = np.logical_and(y < self._min_val, y < y_start)
+                if self.min_val is not None:
+                    to_be_masked = np.logical_and(y < self.min_val, y < y_start)
                     n_to_be_masked = to_be_masked.sum()
                     if n_to_be_masked > 0:
                         self._ax.scatter(
@@ -993,14 +618,10 @@ class NumericalTrack(Track):
                     if self.label_masked_peak:
                         from scipy.signal import find_peaks
 
-                        # find peaks in signal tracks which are higher than the threshold
-                        # then add annotation to show their values
-                        # require the distance between peaks to be away from their neighbours
-                        # for at least 1% of the overall window
                         peaks, _ = find_peaks(
                             -1 * y,
                             rel_height=1,
-                            height=-1 * self._min_val,
+                            height=-1 * self.min_val,
                             distance=distance_cutoff,
                         )
                         texts = []
@@ -1008,15 +629,15 @@ class NumericalTrack(Track):
                         for i, _x in enumerate(peaks):
                             X = x[_x]
                             Y = y[_x]
-                            if self._overflow_label_format is not None:
-                                s = self._overflow_label_format.format(Y)
+                            if self.overflow_label_format is not None:
+                                s = self.overflow_label_format.format(Y)
                             else:
                                 s = "{:.2f}".format(Y)
-                            if not self._overflow_label_auto_adjust:
+                            if not self.overflow_label_auto_adjust:
                                 texts.append(
                                     self._ax.text(
                                         X,
-                                        self._min_val,
+                                        self.min_val,
                                         s,
                                         va="bottom",
                                         ha=ha_choices[i % 2],
@@ -1024,347 +645,36 @@ class NumericalTrack(Track):
                                 )
                             else:
                                 texts.append(
-                                    self._ax.text(X, self._min_val, s, va="bottom")
+                                    self._ax.text(X, self.min_val, s, va="bottom")
                                 )
-                        if self._overflow_label_auto_adjust and len(texts) > 0:
+                        if self.overflow_label_auto_adjust and len(texts) > 0:
                             try:
                                 from adjustText import adjust_text
 
                                 adjust_text(texts)
-                            except:
+                            except Exception:
                                 pass
 
-    @property
-    def scale(self):
-        """
-        Normalization factors for signals, you can set this value to normalize densities by RPM, etc.
-        """
-        return self._scale
-
-    @scale.setter
-    def scale(self, value):
-        try:
-            self._scale = float(value)
-        except:
-            pass
-
-    def __init__(self, **kwargs):
-        super(NumericalTrack, self).__init__(**kwargs)
-
-        # range
-        self._min_val = None
-        self.min_val = kwargs.pop("min_val", None)
-        self._max_val = None
-        self.max_val = kwargs.pop("max_val", None)
-        self._show_range = True
-        self.show_range = kwargs.pop("show_range", True)
-
-        # stats
-        self._n_bins = None
-        self.n_bins = kwargs.pop("n_bins", None)
-        self._stat_method = None
-        self.stat_method = kwargs.pop("stat_method", None)
-
-        # data transformation
-        self._data_transform = None
-        self.data_transform = kwargs.get("transformation", None)
-        self._convert_nan_to_num = None
-        self.convert_nan_to_num = kwargs.pop("convert_nan_to_num", np.nan_to_num)
-
-        self._scale = None
-        self.scale = kwargs.pop("scale", 1)
-        self.is_real_number_track = 0
-
-        self._label_masked_peak = None
-        self.label_masked_peak = kwargs.pop("label_masked_peak", True)
-        self._overflow_label_format = None
-        self.overflow_label_format = kwargs.pop("overflow_label_format", "{:.1f}")
-        self._overflow_label_auto_adjust = None
-        self.overflow_label_auto_adjust = kwargs.pop(
-            "overflow_label_auto_adjust", False
-        )
-        self._yscale_func = None
-
-    @property
-    def equal_space_for_pos_neg_ranges(self):
-        """
-        Set it as `True` to force data range to be independently
-        """
-        return self._equal_space_for_pos_neg_ranges
-
-    @equal_space_for_pos_neg_ranges.setter
-    def equal_space_for_pos_neg_ranges(self, value):
-        if value:
-            self._equal_space_for_pos_neg_ranges = 1
-        elif value == 0 or value is False:
-            self._equal_space_for_pos_neg_ranges = 0
-        else:
-            raise ValueError("draw_y_independently must be either 0/False or 1/True")
-
-    @property
-    def min_val(self):
-        """
-        Min value for the y-axis. If the signal values are smaller than `min_val`, they will be capped.
-        """
-        return self._min_val
-
-    @min_val.setter
-    def min_val(self, value):
-        try:
-            self._min_val = float(value)
-        except:
-            pass
-
-    def reset_min_val(self):
-        """
-        Remove constraints for min value
-
-        Returns
-        -------
-
-        """
-        self._min_val = None
-
-    @property
-    def max_val(self):
-        """
-        Max value for the y-axis. If the signal values are greater than `min_val`, they will be capped.
-        """
-        return self._max_val
-
-    @max_val.setter
-    def max_val(self, value):
-        try:
-            self._max_val = float(value)
-        except:
-            pass
-
-    @property
-    def label_masked_peak(self):
-        """
-        If the signal values are capped, setting this value as True will write the original
-        values near the cap signs.
-        """
-        return self._label_masked_peak
-
-    @label_masked_peak.setter
-    def label_masked_peak(self, value):
-        self._label_masked_peak = bool(value)
-
-    @property
-    def overflow_label_format(self):
-        """
-        String format for labeling overflow loci
-        """
-        return self._overflow_label_format
-
-    @overflow_label_format.setter
-    def overflow_label_format(self, value):
-        self._overflow_label_format = value
-
-    @property
-    def overflow_label_auto_adjust(self):
-        """
-        Switch controlling the automatic placement of text labels for overflow signals
-        """
-        return self._overflow_label_auto_adjust
-
-    @overflow_label_auto_adjust.setter
-    def overflow_label_auto_adjust(self, value):
-        self._overflow_label_auto_adjust = value
-
-    def reset_max_val(self):
-        """
-        Remove constraints for max value
-
-        Returns
-        -------
-
-        """
-        self._max_val = None
-
-    @property
-    def show_range(self):
-        """
-        Max value for the y-axis
-        """
-        return self._show_range
-
-    @show_range.setter
-    def show_range(self, value):
-        try:
-            self._show_range = bool(value)
-        except:
-            pass
-
-    @property
-    def convert_nan_to_num(self):
-        """
-        Nan conversion
-        """
-        return self._convert_nan_to_num
-
-    @convert_nan_to_num.setter
-    def convert_nan_to_num(self, value: Union[None, Callable]):
-        """
-        Convert nan values to numbers
-
-        Parameters
-        ----------
-        value : Union[None, Callable]
-            The function to mapping nan values. If set to None, the function will do nothing (echo).
-
-        Returns
-        -------
-
-        """
-        if value is None:
-            self._convert_nan_to_num = self._echo
-        elif callable(value):
-            self._convert_nan_to_num = value
-        else:
-            raise ValueError(
-                "value of convert_nan_to_num must be None or a callable object."
-            )
-
-    @property
-    def n_bins(self):
-        """
-        Number of bins to apply, if a positive number is set, the window will be separated in bins and stat method will be applied, default `None` (raw signals)
-        """
-        return self._n_bins
-
-    @n_bins.setter
-    def n_bins(self, value):
-        try:
-            self._n_bins = int(value)
-        except:
-            pass
-
-    @property
-    def stat_method(self):
-        """
-        Statistical method for binning windows
-        """
-        return self._stat_method
-
-    @stat_method.setter
-    def stat_method(self, value):
-        try:
-            np_supported_methods = {
-                "mean",
-                "std",
-                "median",
-                "count",
-                "sum",
-                "min",
-                "max",
-            }
-            if value is not None:
-                if value in np_supported_methods:
-                    self._stat_method = value
-                else:
-                    raise UnimplementedBinStat
-            else:
-                self._stat_method = None
-        except:
-            pass
-
-    @property
-    def data_transform(self):
-        """
-        Function for data transformation, currently supported values:
-
-            * None: no function will be called, return raw values
-            * "asinh": inverse hyperbolic sine function
-            * "ln": natural logarithm function (log base e)
-            * "log2": the binary logarithm function (log base 2)
-            * "log10": the common logarithmic function (log base 10)
-            * "log1p": the natural logarithm of one plus (ln(1+x))
-            * function: a customized callable function
-            Note: If you add `r` at the beginning of log functions, values will be :math:`-f(-x)`
-
-        Examples
-        --------
-
-        .. plot:: ../examples/plot_data_transform.py
-        """
-        return self._data_transform
-
-    @data_transform.setter
-    def data_transform(self, value):
-        try:
-            if value is None:
-                self._data_transform = self._echo
-            elif type(value) is str:
-                if value == "ln":
-                    self._data_transform = np.log
-                elif value == "asinh":
-                    self._data_transform = np.arcsinh
-                elif value == "log2":
-                    self._data_transform = np.log2
-                elif value == "log10":
-                    self._data_transform = np.log10
-                elif value == "log1p":
-                    self._data_transform = np.log1p
-                elif value == "rln":
-                    self._data_transform = lambda x: -1 * np.log(-1 * x)
-                elif value == "rlog2":
-                    self._data_transform = lambda x: -1 * np.log2(-1 * x)
-                elif value == "rlog10":
-                    self._data_transform = lambda x: -1 * np.log10(-1 * x)
-                elif value == "rlog1p":
-                    self._data_transform = lambda x: -1 * np.log1p(-1 * x)
-                else:
-                    raise UnimplementedTransformation(value)
-            elif callable(value):
-                self._data_transform = value
-            else:
-                raise UnimplementedTransformation(value)
-        except Exception as e:
-            print(e)
-
     def _merge_redundant_values(self, x: np.ndarray, y: np.ndarray) -> list:
-        keep_idx = [
-            0,
-        ]
-        # find indices where consecutive values are not equal
+        keep_idx = [0]
         for i in range(1, x.shape[0] - 1):
             if y[i + 1] == y[i] and y[i] == y[i - 1]:
                 continue
             else:
                 keep_idx.append(i)
-        # include the last index to ensure the final value is included
         keep_idx.append(x.shape[0] - 1)
         return keep_idx
 
 
 class DynamicValueTrack(NumericalTrack):
-    """
-    While other tracks load signal values from external files,
-    DynamicValueTrack allows you to show the numerical values directly from your code.
-    Track values should be assigned via the `values` property.
+    """Show numerical values assigned in code rather than loaded from a file."""
 
-    Parameters
-    ----------
-    track : str
-        Placeholder
-    kwargs :
+    track: str = Field(default="", description="Placeholder")
 
-    Raises
-    ------
-    ValueError will be raised if the len the values property is not equal to the span of plotting region as defined as `end` - `start`
+    _values: Any = PrivateAttr(default=None)
 
-    Examples
-    --------
-
-    .. plot:: ../examples/plot_dyn_track.py
-    """
-
-    def __init__(self, track: str = "", **kwargs):
-        super(DynamicValueTrack, self).__init__(**kwargs)
-
-        self._values = None
+    def __init__(self, track: str = "", **data: Any) -> None:
+        super().__init__(track=track, **data)
 
     @property
     def values(self):
@@ -1383,35 +693,101 @@ class DynamicValueTrack(NumericalTrack):
         return xvalues, self.values
 
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
-        """
-        Draw track
-
-        Parameters
-        ----------
-        chromosome : str
-            placeholder
-        start : int
-            placeholder
-        end : int
-            placeholder
-        ax : :class:`matplotlib.pyplot.Axes`
-            matplotlib.pyplot.Axes for this track
-        index : int
-            The first subplot (track), index==0, will have its top border and xticks shown up
-        kwargs :
-
-        Returns
-        -------
-
-        """
-        super(DynamicValueTrack, self)._draw_track(
+        super()._draw_track(
             chromosome=chromosome, start=start, end=end, ax=ax, index=index, **kwargs
         )
         x, y = self._get(chromosome=chromosome, start=start, end=end)
         self._ax.plot(
-            x, y, color=self.color, linewidth=self.line_width, alpha=self._alpha
+            x, y, color=self.color, linewidth=self.line_width, alpha=self.alpha
         )
-        # self.ax.bar(x, y, color=self.color, width=1)
         self._ax.fill_between(
-            x, y, 0, facecolor=self.color, alpha=self._alpha, lw=self.line_width
+            x, y, 0, facecolor=self.color, alpha=self.alpha, lw=self.line_width
         )
+
+
+class DualAxisTrack(Track):
+    """Compose two existing tracks into one subplot with dual y-axes."""
+
+    left_track: Track = Field(description="Track drawn on the left y-axis")
+    right_track: Track = Field(description="Track drawn on the right y-axis")
+
+    _right_ax: Any = PrivateAttr(default=None)
+
+    def __init__(self, left_track: Track, right_track: Track, **data: Any) -> None:
+        super().__init__(left_track=left_track, right_track=right_track, **data)
+
+    def layout_height(self) -> float:
+        return max(self.left_track.layout_height(), self.right_track.layout_height())
+
+    def _pre_plot_hook(self, chromosome, start, end, **kwargs):
+        inward_ticks = kwargs.get("inward_ticks", False)
+        self.left_track._pre_plot_hook(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            inward_ticks=inward_ticks,
+        )
+        self.right_track._pre_plot_hook(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            inward_ticks=inward_ticks,
+        )
+
+    def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
+        self.left_track._draw_track(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            ax=ax,
+            index=index,
+            **kwargs,
+        )
+        self._ax = self.left_track._ax
+
+        self._right_ax = ax.twinx()
+        right_kwargs = dict(kwargs)
+        right_kwargs["hide_coordinates"] = True
+        self.right_track._draw_track(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            ax=self._right_ax,
+            index=1,
+            **right_kwargs,
+        )
+        self._right_ax.set_xlim(self._ax.get_xlim())
+        self._right_ax.yaxis.set_label_position("right")
+        self._right_ax.yaxis.tick_right()
+        self._right_ax.spines["left"].set_visible(False)
+
+    def _post_plot_hook(self, chromosome, start, end, ax, index=1, **kwargs):
+        self.left_track._post_plot_hook(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            ax=self.left_track._ax,
+            index=index,
+            **kwargs,
+        )
+        self.right_track._post_plot_hook(
+            chromosome=chromosome,
+            start=start,
+            end=end,
+            ax=self.right_track._ax,
+            index=1,
+            **kwargs,
+        )
+        self._right_ax.set_xlim(self.left_track._ax.get_xlim())
+
+    def set_highlight_regions(self, starts, ends, colors=(), alpha_vals=()):
+        self.left_track.set_highlight_regions(starts, ends, colors, alpha_vals)
+        self.right_track.set_highlight_regions(starts, ends, colors, alpha_vals)
+
+    def add_highlight_region(self, start, end):
+        self.left_track.add_highlight_region(start, end)
+        self.right_track.add_highlight_region(start, end)
+
+    def remove_highlight(self):
+        self.left_track.remove_highlight()
+        self.right_track.remove_highlight()

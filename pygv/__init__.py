@@ -1,4 +1,6 @@
-from ._version import get_versions
+"""Python Genome Viewer."""
 
-__version__ = get_versions()["version"]
-del get_versions
+try:
+    from ._version import __version__
+except ImportError:  # pragma: no cover
+    __version__ = "0.0.0"
