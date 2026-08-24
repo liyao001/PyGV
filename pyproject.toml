@@ -165,6 +165,8 @@ known-first-party = ["pygv"]
 [tool.pixi.workspace]
 channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
+# pixi.lock is format v7 (pixi >= 0.68). Older pixi cannot install --locked.
+requires-pixi = ">=0.68.0"
 
 [tool.pixi.dependencies]
 python = ">=3.10,<3.14"
