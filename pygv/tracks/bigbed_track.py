@@ -1,137 +1,62 @@
 import os
+import re
 import warnings
 from collections import namedtuple
-from typing import Any, ClassVar
+from typing import Any
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pyBigWig
 from matplotlib.lines import Line2D
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr
 
-from .bed_track import BedTrack, BedTrackConfig
-from .track import NumericalTrack, NumericalTrackConfig
+from .bed_track import BedTrack
+from .track import NumericalTrack
+from .types import Color
 
 
-class UCSCMutationTrackConfig(NumericalTrackConfig):
-    line_color: Any = Field(
-        default="red", description="Matplotlib color used for mutation marker lines."
-    )
+class UCSCMutationTrack(NumericalTrack):
+    """Lollipop plot from UCSC-style mutational bigBed files."""
+
+    track: str = Field(description="Path or URL to a bigBed file")
+    line_color: Color = Field(default="red", kw_only=True, description="Stem color")
     apply_color_gradient: bool = Field(
-        default=False, description="Whether to color mutation markers with a value gradient."
+        default=False,
+        kw_only=True,
+        description="Apply a color gradient to mutation markers",
     )
     color_map: Any = Field(
-        default=plt.cm.Reds, description="Callable colormap used for mutation color gradients."
+        default_factory=lambda: plt.cm.Reds,
+        kw_only=True,
+        description="Colormap for markers when apply_color_gradient is True",
     )
     normalizer: Any = Field(
-        default=matplotlib.colors.Normalize,
-        description="Callable normalizer used before applying the mutation color map.",
+        default_factory=lambda: matplotlib.colors.Normalize,
+        kw_only=True,
+        description="Matplotlib normalizer class for the color gradient",
     )
 
-    @field_validator("line_color")
-    def _validate_line_color(cls, value):
-        if value is None or matplotlib.colors.is_color_like(value):
-            return value
-        raise ValueError(f"Invalid color value: {value}")
+    _bb: Any = PrivateAttr(default=None)
+    _filters: dict = PrivateAttr(default_factory=dict)
+    _filter_supported_fields: set = PrivateAttr(default_factory=lambda: {"MAF", "ID"})
+    _color_map: Any = PrivateAttr(default=None)
 
-    @field_validator("color_map", "normalizer")
-    def _validate_callable(cls, value):
-        if callable(value):
-            return value
-        raise ValueError("color_map and normalizer must be callable")
+    def __init__(self, track: str, **data: Any) -> None:
+        super().__init__(track=track, **data)
 
-class BigBed6TrackConfig(BedTrackConfig):
-    pass
-
-
-class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
-    """
-    Lollipop plot from UCSC-style mutational bigwig files
-
-    Parameters
-    ----------
-    track :
-    kwargs :
-        line_color : color_like
-            :attr:`line_color`
-        apply_color_gradient : bool
-            :attr:`apply_color_gradient`
-        color_map : str or `matplotlib.pyplot.cm`
-            :attr:`color_map`
-    """
-
-    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
-        **NumericalTrack._FIELD_PRIVATE_ATTRS,
-        "line_color": "_line_color",
-        "apply_color_gradient": "_apply_color_gradient",
-        "color_map": "_color_map",
-        "normalizer": "_normalizer",
-    }
-
-    @property
-    def line_color(self):
-        """
-        Line color, by default, red
-        """
-        return self._line_color
-
-    @line_color.setter
-    def line_color(self, value):
-        try:
-            self._line_color = value
-        except:
-            pass
-
-    @property
-    def apply_color_gradient(self):
-        """
-        Set it to True to apply color gradient to marks, by default, False
-        """
-        return self._apply_color_gradient
-
-    @apply_color_gradient.setter
-    def apply_color_gradient(self, value):
-        try:
-            self._apply_color_gradient = bool(value)
-        except:
-            pass
-
-    @property
-    def color_map(self):
-        """
-        Color map for markers
-        """
-        return self._color_map
-
-    @color_map.setter
-    def color_map(self, value):
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        if not os.path.exists(self.track) and not self.track.startswith("http"):
+            raise ValueError
         try:
             self._color_map = matplotlib.colors.ListedColormap(
-                value(np.linspace(0, 1, 20))[:-5, :-1]
+                self.color_map(np.linspace(0, 1, 20))[:-5, :-1]
             )
-        except:
-            pass
-
-    def __init__(self, track, **kwargs):
-        config = UCSCMutationTrackConfig(**kwargs)
-        if not callable(config.color_map) or not callable(config.normalizer):
-            raise ValueError("color_map and normalizer must be callable")
-        super(UCSCMutationTrack, self).__init__(**kwargs)
-        self._filters = dict()
-        self._filter_supported_fields = {"MAF", "ID"}
-        self._line_color = "red"
-        self.line_color = config.line_color
-        self._apply_color_gradient = False
-        self.apply_color_gradient = config.apply_color_gradient
-        self._color_map = plt.cm.Reds
-        self.color_map = config.color_map
-        self._normalizer = config.normalizer
-        if not os.path.exists(track) and not track.startswith("http"):
-            raise ValueError
-
-        self.bb = pyBigWig.open(track)
-        if not self.bb.isBigBed:
+        except Exception:
+            self._color_map = self.color_map
+        self._bb = pyBigWig.open(self.track)
+        if not self._bb.isBigBed:
             raise ValueError("File needs to be in bigBed format!")
 
     def get_filters(self):
@@ -164,7 +89,7 @@ class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
     def _get(self, chromosome, start, end):
         entries = []
         try:
-            for entry in self.bb.entries(chromosome, start, end):
+            for entry in self._bb.entries(chromosome, start, end):
                 entries.append(entry)
         except:
             pass
@@ -215,7 +140,7 @@ class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
                                 )
                             )
                         )
-                    except Exception as e:
+                    except Exception:
                         continue
                     # plot marker
                     ys.append(maf)
@@ -224,8 +149,8 @@ class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
         except:
             pass
 
-        if self._apply_color_gradient:
-            norm = self._normalizer(vmin=np.min(ys), vmax=np.quantile(ys, 0.98))
+        if self.apply_color_gradient:
+            norm = self.normalizer(vmin=np.min(ys), vmax=np.quantile(ys, 0.98))
             self._ax.scatter(
                 xs, ys, marker="v", color=self._color_map(norm(ys)), clip_on=False
             )
@@ -244,7 +169,7 @@ class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
         for x, y in zip(xs, ys):
             self._ax.add_line(
                 Line2D(
-                    (x, x), (0, y), color=self._line_color, linewidth=self.line_width
+                    (x, x), (0, y), color=self.line_color, linewidth=self.line_width
                 )
             )
 
@@ -267,38 +192,37 @@ class UCSCMutationTrack(NumericalTrack, UCSCMutationTrackConfig):
                 pass
 
 
-class BigBed6Track(BedTrack, BigBed6TrackConfig):
-    """
-    Standard BigBed6 track
+class BigBed6Track(BedTrack):
+    """Standard BigBed6 track."""
 
-    Parameters
-    ----------
-    track : str
-        File path or url to a bigBed file
-    kwargs : dict
-        The same as :class:`pygv.tracks.track.AnnotationTrack`
-
-    Examples
-    --------
-
-    .. plot:: ../examples/plot_bigbed.py
-    """
+    _bb: Any = PrivateAttr(default=None)
+    _bb_obj: Any = PrivateAttr(default=None)
+    _BigBedRecord: Any = PrivateAttr(default=None)
+    _filters: dict = PrivateAttr(default_factory=dict)
+    _filter_supported_fields: set = PrivateAttr(
+        default_factory=lambda: {
+            "contig",
+            "start",
+            "end",
+            "name",
+            "score",
+            "strand",
+        }
+    )
 
     def _get(self, chromosome, start, end):
         results = []
-        n_expected_fields = len(self.fields)
+        n_expected_fields = len(self._fields)
         warning = 0
         try:
-            for entry in self.bb_obj.entries(chromosome, start, end):
+            for entry in self._bb_obj.entries(chromosome, start, end):
                 row = [chromosome, entry[0], entry[1]]
                 other_items = entry[2].strip().split("\t")
                 row.extend(other_items)
-                # in cases where there are more than n_expected_fields
-                # we only use the first several fields
                 if len(row) > n_expected_fields:
                     warning = len(row)
                     row = row[:n_expected_fields]
-                results.append(self.BigBedRecord._make(row))
+                results.append(self._BigBedRecord._make(row))
             if warning > 0:
                 warnings.warn(
                     f"Input bigBed should only have {n_expected_fields} fields "
@@ -307,37 +231,26 @@ class BigBed6Track(BedTrack, BigBed6TrackConfig):
                 )
             return sorted(results, key=lambda x: x.start)
         except (ValueError, TypeError):
-            # in case no feature is available in that window
             return []
 
-    def __init__(self, track, **kwargs):
-        BigBed6TrackConfig(**kwargs)
-        kwargs["_is_bb"] = True
-        super(BigBed6Track, self).__init__(track, **kwargs)
-        # parse bed file
-        self.bed_file = track
-        self.fields = ("contig", "start", "end", "name", "score", "strand")
-
-        if not os.path.exists(track) and not track.startswith("http"):
+    def _open_source(self) -> None:
+        self._bed_file = self.track
+        self._fields = ("contig", "start", "end", "name", "score", "strand")
+        if not os.path.exists(self.track) and not self.track.startswith("http"):
             raise ValueError
-
-        self.bb = pyBigWig.open(track)
-        if not self.bb.isBigBed:
+        self._bb = pyBigWig.open(self.track)
+        if not self._bb.isBigBed:
             raise ValueError("File needs to be in bigBed format!")
-
-        self.bb_obj = pyBigWig.open(track)
-
-        self.BigBedRecord = namedtuple("BigBedRecord", self.fields)
-
-        self._filters = dict()
-        self._filter_supported_fields = {
-            "contig",
-            "start",
-            "end",
-            "name",
-            "score",
-            "strand",
-        }
+        self._bb_obj = pyBigWig.open(self.track)
+        self._BigBedRecord = namedtuple("BigBedRecord", self._fields)
+        self._rgb_check = re.compile(r"(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})")
+        self._small_relative = 0
+        if self.plot_thickness is None:
+            self.plot_thickness = False
+        if self.color is None:
+            self.color = "#A1A1A1"
+        if self.edge_color is None:
+            self.edge_color = "#6E6E6E"
 
     def get_filters(self):
         """

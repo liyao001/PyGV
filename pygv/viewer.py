@@ -671,6 +671,7 @@ class GenomeViewer(object):
                                         [y_bottom, y_top],
                                         transform=fig.transFigure, color="black", linewidth=1))
 
+
     def show_tracks(self):
         """
         Show all registered tracks
@@ -801,7 +802,7 @@ class GenomeViewer(object):
         """
         heights = np.zeros(len(self._registered_tracks))
         for index, track in enumerate(self._registered_tracks):
-            heights[index] = track.height
+            heights[index] = track.layout_height()
         return heights
 
     def _determine_figure_height(self, heights, height_scale_factor, fig_height):

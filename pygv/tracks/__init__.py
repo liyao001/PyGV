@@ -20,6 +20,7 @@ from .gtf_track import GtfTrack
 from .logo_track import DynseqTrack, LogoTrack
 from .track import (
     AnnotationTrack,
+    DualAxisTrack,
     DynamicValueTrack,
     NumericalTrack,
     Track,
@@ -30,6 +31,7 @@ __all__ = [
     "AnnotationTrack",
     "NumericalTrack",
     "DynamicValueTrack",
+    "DualAxisTrack",
     "CoverageTrack",
     "CollapsedReadTrack",
     "SplicedReadTrack",
