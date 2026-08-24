@@ -1,0 +1,201 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "GenomeViewer"
+dynamic = ["version"]
+description = "Python Genome Viewer"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+keywords = ["genomics", "visualization", "matplotlib", "genome-browser"]
+authors = [
+  { name = "Li Yao", email = "li@yaobio.com" },
+]
+classifiers = [
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+  "numpy",
+  "matplotlib",
+  "seaborn",
+  "pysam",
+  "pandas",
+  "pybigwig",
+  "pyfaidx",
+  "pydantic>=2.0",
+  "scipy",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build",
+  "coverage[toml]>=6.5",
+  "pytest",
+  "pytest-xdist",
+  "pylint",
+  "ruff",
+  "twine",
+]
+docs = [
+  "sphinx==7.4.7",
+  "pydata-sphinx-theme==0.15.4",
+  "sphinx-gallery",
+]
+
+[project.urls]
+Documentation = "https://pygv.readthedocs.io/"
+Issues = "https://github.com/liyao001/PyGV/issues"
+Source = "https://github.com/liyao001/PyGV"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0"
+
+[tool.hatch.version.raw-options]
+# Historical tags like 0.0 yield odd versions when combined with distance
+# metadata; prefer numeric release tags.
+version_scheme = "post-release"
+git_describe_command = "git describe --dirty --tags --long --match [0-9]* --match v[0-9]* --exclude *dev*"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "pygv/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pygv"]
+include = [
+  "pygv/**/*.py",
+  "pygv/**/*.bed",
+  "pygv/tracks/logomaker/LICENSE",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/pygv",
+  "/tests",
+  "/README.md",
+  "/LICENSE",
+  "/CHANGELOG.md",
+]
+
+[tool.hatch.envs.default]
+features = ["dev"]
+
+[tool.hatch.envs.default.scripts]
+test = "pytest {args:tests}"
+test-cov = "coverage run -m pytest {args:tests}"
+lint = "ruff check {args:.}"
+check-typos = "typos {args:.}"
+build = "python -m build"
+check-dist = "twine check {args:dist/*}"
+cov-report = [
+  "- coverage combine",
+  "coverage report",
+]
+cov = [
+  "test-cov",
+  "cov-report",
+]
+
+[[tool.hatch.envs.all.matrix]]
+python = ["3.10", "3.11", "3.12", "3.13"]
+
+[tool.hatch.envs.docs]
+features = ["docs"]
+
+[tool.hatch.envs.docs.scripts]
+build = "sphinx-build -b html {args:doc_source doc_build}"
+
+[tool.coverage.run]
+source_pkgs = ["pygv", "tests"]
+branch = true
+parallel = true
+omit = [
+  "pygv/_version.py",
+  "pygv/tracks/logomaker/*",
+]
+
+[tool.coverage.paths]
+pygv = ["pygv", "*/site-packages/pygv"]
+tests = ["tests", "*/tests"]
+
+[tool.coverage.report]
+exclude_lines = [
+  "no cov",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = [
+  "dist",
+  "doc_doc",
+  "doc_source",
+  "examples",
+  "pygv/gui.py",
+  "pygv/tracks/logomaker",
+  "pygv/_version.py",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+# Pre-existing drawing-code patterns; tighten these in a dedicated cleanup.
+ignore = ["E722", "E731", "E741"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pygv"]
+
+# Pixi workspace.
+#   pixi shell              runtime env (editable GenomeViewer)
+#   pixi shell -e dev       plus hatch, pytest, ruff, typos, twine
+#   pixi run docs           Sphinx HTML into doc_build/
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.dependencies]
+python = ">=3.10,<3.14"
+
+[tool.pixi.pypi-dependencies]
+GenomeViewer = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+hatch = "*"
+ruff = "*"
+twine = "*"
+typos = "*"
+pytest = "*"
+python-build = "*"
+
+# `dev` optional-dependencies (pytest, ruff, ...) are pulled in via features = ["dev"]
+
+[tool.pixi.environments]
+default = { features = [], solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "docs" }
+
+# Developer tasks live on the dev feature so `pixi run test` selects that env.
+[tool.pixi.feature.dev.tasks]
+lint = "ruff check ."
+ruff = "ruff check ."
+typos = "typos"
+test = "pytest"
+build = "python -m build"
+check-dist = "twine check dist/*"
+ci = { depends-on = ["lint", "typos", "test", "build", "check-dist"] }
+
+[tool.pixi.feature.docs.tasks]
+docs = "sphinx-build -b html doc_source doc_build"
