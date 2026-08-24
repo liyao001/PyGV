@@ -1,0 +1,18 @@
+[files]
+extend-exclude = [
+  "doc_source",
+  "doc_doc",
+  "examples/data",
+  "pixi.lock",
+  "pygv/data",
+  "pygv/tracks/logomaker",
+  "*.png",
+  "*.bed",
+]
+
+[default.extend-identifiers]
+# Historical public exception name; keep the spelling for API compatibility.
+Invaild = "Invaild"
+InvaildRegion = "InvaildRegion"
+# numpy.arange in docs / examples
+arange = "arange"
