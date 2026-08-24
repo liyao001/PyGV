@@ -1,14 +1,17 @@
 import os
 import re
 from collections import namedtuple
-from typing import Any
+from typing import Any, Optional
+
 import numpy as np
 import pandas as pd
 from matplotlib import colors
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
+from pydantic import AliasChoices, Field, PrivateAttr
 
-from .track import AnnotationTrack, Track
+from .track import AnnotationTrack
+from .types import Color, ShowMode
 
 
 class _LaneRegistry(object):
@@ -23,57 +26,56 @@ class _LaneRegistry(object):
 
 
 class BedTrack(AnnotationTrack):
-    """
-    If you're looking to visualize genomic features like genes and regulatory elements,
-    you can utilize the :class:`~pygv.tracks.bed_track.BedTrack` in PyGV.
-    If you desire greater control over the specific features to be plotted, such as filtering features by names,
-    gene IDs, or transcript IDs, then the :class:`~pygv.tracks.gtf_track.GtfTrack` may be the preferred choice.
+    """Visualize genomic features from BED files (BED3/4/8/12)."""
 
-    Parameters
-    ----------
-    track : str
-        Path to the input bed file. Index from tabix is optional, but
-        when index presents, drawing will be much faster and less memory intensive.
-        PyGV's BedTrack implementation supports the visualization of genomic features encoded in four BED variations:
+    height: float = Field(
+        default=0.8,
+        gt=0,
+        kw_only=True,
+        description=(
+            "Height of each feature lane. If you have four feature lanes and height "
+            "is 0.25, the final track has the same overall height as a unit-height track."
+        ),
+    )
+    show_mode: ShowMode = Field(
+        default="expanded",
+        kw_only=True,
+        description=(
+            "Collapse overlapping features (`collapsed`) or keep them separately "
+            "(`expanded`) for plotting."
+        ),
+    )
+    plot_thickness: Optional[bool] = Field(
+        default=None,
+        kw_only=True,
+        description=(
+            "When thickStart/thickEnd are present (e.g. CDS), draw that region with "
+            "a thicker box. Automatically enabled for BED8+ unless set explicitly."
+        ),
+    )
+    block_line_height: float = Field(
+        default=1,
+        kw_only=True,
+        description="Line/edge width for blocks",
+    )
 
-        * Bed3: includes three columns: chromosome, start, and end.
-        * Bed4: includes three columns: chromosome, start, end, and name.
-        * Bed8: extends Bed3 with additional columns for name, score, strand, thickStart, and thickEnd.
-        * Bed12: the most comprehensive, includes columns for itemRgb, blockCount, blockSizes, and blockStarts in addition to those found in Bed8.
-
-    kwargs : Any
-        height : float
-            Height of each feature lane. If you have four feature lanes, and the height value
-            is set as 0.25, then the final track will have identical overall height as other
-            tracks. If you have multiple :class:`~pygv.tracks.bed_track.BedTrack` or other kind of :class:`~pygv.tracks.track.AnnotationTrack`, you can set
-            the same height values to all these tracks, which makes sure all tracks have consistent
-            appearances (which is also the default behavior).
-        allowed_feature_lanes : Optional[int]
-            See :attr:`~pygv.tracks.track.AnnotationTrack.allowed_feature_lanes`
-        plot_thickness : bool
-            See :attr:`~plot_thickness`
-        padding_left : int or float
-            See :attr:`~pygv.tracks.track.AnnotationTrack.padding_left`
-        name : str
-            Track name. :attr:`~pygv.tracks.track.Track.name`
-        show_name : bool
-            Show feature names. See :attr:`~pygv.tracks.track.AnnotationTrack.show_name`
-        More kwargs can be seen here: :class:`~pygv.tracks.track.AnnotationTrack`
-
-    Examples
-    --------
-
-    .. plot:: ../examples/plot_bed.py
-    """
+    _bed_file: Optional[str] = PrivateAttr(default=None)
+    _fields: tuple = PrivateAttr(default=())
+    _bed_obj: Any = PrivateAttr(default=None)
+    _BedRecord: Any = PrivateAttr(default=None)
+    _parser: Any = PrivateAttr(default=None)
+    _rgb_check: Any = PrivateAttr(default=None)
 
     def _get(self, chromosome, start, end):
-        pass
+        if self._parser is None:
+            return
+        yield from self._parser(chromosome, start, end)
 
     def _pysam_parser(self, chromosome, start, end):
         import pysam
 
         try:
-            for row in self.bed_obj.fetch(
+            for row in self._bed_obj.fetch(
                 chromosome, start, end, parser=pysam.asTuple()
             ):
                 yield self._BedRecord._make(row)
@@ -82,140 +84,85 @@ class BedTrack(AnnotationTrack):
             return
 
     def _pd_parser(self, chromosome, start, end):
-        for row in self.bed_obj.loc[
+        for row in self._bed_obj.loc[
             np.logical_and(
-                self.bed_obj.contig == chromosome,
-                np.logical_and(self.bed_obj.start <= end, self.bed_obj.end >= start),
+                self._bed_obj.contig == chromosome,
+                np.logical_and(self._bed_obj.start <= end, self._bed_obj.end >= start),
             ),
             :,
         ].values:
             yield self._BedRecord._make(row)
 
-    def __init__(self, track, **kwargs: Any):
-        if "height" not in kwargs:
-            kwargs["height"] = 0.8
-        super(BedTrack, self).__init__(track, **kwargs)
-        is_bb = kwargs.pop("_is_bb", False)
-        self._show_mode = ""
-        self.show_mode = kwargs.pop("show_mode", "expanded")
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        self._open_source()
 
-        self._plot_thickness = 0
-        self._plot_block = 0
+    def _open_source(self) -> None:
+        if not os.path.exists(self.track):
+            raise ValueError
 
-        if not is_bb:
-            if not os.path.exists(track):
-                raise ValueError
+        self._bed_file = self.track
+        self._fields = (
+            "contig",
+            "start",
+            "end",
+            "name",
+            "score",
+            "strand",
+            "thickStart",
+            "thickEnd",
+            "itemRgb",
+            "blockCount",
+            "blockSizes",
+            "blockStarts",
+        )
+        use_pysam = 1
+        try:
+            import pysam
+        except ImportError:
+            use_pysam = 0
 
-            # parse bed file
-            self.bed_file = track
-            self.fields = (
-                "contig",
-                "start",
-                "end",
-                "name",
-                "score",
-                "strand",
-                "thickStart",
-                "thickEnd",
-                "itemRgb",
-                "blockCount",
-                "blockSizes",
-                "blockStarts",
-            )
-            use_pysam = 1
-            try:
-                import pysam
-            except ImportError:
-                use_pysam = 0
-
-            if use_pysam and track.endswith(".bed.gz"):
-                if os.path.exists(track + ".tbi"):
+        if use_pysam and self.track.endswith(".bed.gz"):
+            if os.path.exists(self.track + ".tbi"):
+                use_pysam = 1
+            else:
+                try:
+                    pysam.tabix_index(self.track)
                     use_pysam = 1
-                else:
-                    try:
-                        pysam.tabix_index(track)
-                        use_pysam = 1
-                    except Exception as e:
-                        use_pysam = 0
-                        print(e)
-            else:
-                use_pysam = 0
-            if use_pysam:
-                self.bed_obj = pysam.TabixFile(track)
-                tmp = pd.read_csv(track, sep="\t", header=None, comment="#", nrows=1)
-                n_fields = tmp.shape[1]
-                self._get = self._pysam_parser
-            else:
-                self.bed_obj = pd.read_csv(track, sep="\t", header=None, comment="#")
-                n_fields = self.bed_obj.shape[1]
-                self.bed_obj.columns = self.fields[:n_fields]
-                self._get = self._pd_parser
+                except Exception as e:
+                    use_pysam = 0
+                    print(e)
+        else:
+            use_pysam = 0
+        if use_pysam:
+            self._bed_obj = pysam.TabixFile(self.track)
+            tmp = pd.read_csv(self.track, sep="\t", header=None, comment="#", nrows=1)
+            n_fields = tmp.shape[1]
+            self._parser = self._pysam_parser
+        else:
+            self._bed_obj = pd.read_csv(
+                self.track, sep="\t", header=None, comment="#"
+            )
+            n_fields = self._bed_obj.shape[1]
+            self._bed_obj.columns = self._fields[:n_fields]
+            self._parser = self._pd_parser
 
-            self._BedRecord = namedtuple("BedRecord", self.fields[:n_fields])
+        self._BedRecord = namedtuple("BedRecord", self._fields[:n_fields])
 
-            if n_fields >= 8:
-                self.plot_thickness = 1
-                if "plot_thickness" in kwargs:
-                    self.plot_thickness = kwargs.pop("plot_thickness")
-            if n_fields == 12:
-                self._plot_block = 1
+        if n_fields >= 8:
+            if self.plot_thickness is None:
+                self.plot_thickness = True
+        elif self.plot_thickness is None:
+            self.plot_thickness = False
+        if n_fields == 12:
+            self._plot_block = 1
         self._rgb_check = re.compile(r"(\d{1,3}),\s*(\d{1,3}),\s*(\d{1,3})")
-        self.small_relative = 0
-        self._block_line_width = 0
-        self.block_line_height = kwargs.pop("block_line_height", 1)
+        self._small_relative = 0
 
-        # override defaults
         if self.color is None:
             self.color = "#A1A1A1"
         if self.edge_color is None:
             self.edge_color = "#6E6E6E"
-
-    @property
-    def plot_thickness(self):
-        """
-        When valid starting (thickStart) and ending (thickEnd) positions are provided for a feature,
-        as observed, for instance, in the region between the start and stop codon within gene displays,
-        this specific region will be illustrated with a thicker line. In situations where there is no
-        valid `thick` section, whether due to the absence of `thickStart` and `thickEnd` positions
-        (as in the case of providing a bed3 file) or when the length of the feature is less than 1,
-        the :code:`plot_thickness` property will be automatically set to :code:`False`.
-        """
-        return self._plot_thickness
-
-    @plot_thickness.setter
-    def plot_thickness(self, value):
-        try:
-            self._plot_thickness = bool(value)
-        except Exception as e:
-            print(e)
-
-    @property
-    def show_mode(self):
-        """
-        Collapse overlapping features (collapsed) or keep them separately (expanded) for plotting.
-        """
-        return self._show_mode
-
-    @show_mode.setter
-    def show_mode(self, value):
-        if value not in ["expanded", "collapsed"]:
-            raise ValueError("show_mode must be either expanded or collapsed")
-        else:
-            self._show_mode = value
-
-    @property
-    def block_line_width(self):
-        """
-        Line/edge width for blocks.
-        """
-        return self._block_line_width
-
-    @block_line_width.setter
-    def block_line_width(self, value):
-        try:
-            self._block_line_width = float(value)
-        except Exception as e:
-            raise e
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
         """
@@ -249,7 +196,7 @@ class BedTrack(AnnotationTrack):
             visible_start = max(start_loc, start)
             visible_end = min(end_loc, end)
 
-            if self._hide_visual_dup:
+            if self.hide_visual_dup:
                 k = (visible_start, visible_end, interval.strand)
                 if k in added:
                     continue
@@ -339,7 +286,7 @@ class BedTrack(AnnotationTrack):
         for lane in self._lane_registries:
             empty_lane = True
             active_lane = lane.offset
-            real_active_line = (self._patch_height + self._lane_space) * active_lane
+            real_active_line = (self.patch_height + self.lane_space) * active_lane
             for interval in lane.features:
                 color = self.color
                 empty_lane = False
@@ -366,7 +313,7 @@ class BedTrack(AnnotationTrack):
                             end_loc - 1 if end_loc <= end else visible_end,
                         ),
                         (-1 * real_active_line, -1 * real_active_line),
-                        color=self._line_color,
+                        color=self.line_color,
                         linewidth=self.line_width,
                         alpha=0,
                         clip_on=True,
@@ -376,10 +323,10 @@ class BedTrack(AnnotationTrack):
                     rec = Rectangle(
                         xy=(
                             start_loc,
-                            -1 * real_active_line - (self._patch_height / 2),
+                            -1 * real_active_line - (self.patch_height / 2),
                         ),
                         width=end_loc - start_loc,
-                        height=self._patch_height,
+                        height=self.patch_height,
                         edgecolor=self.edge_color,
                         facecolor=color,
                         linewidth=self.block_line_height,
@@ -402,7 +349,7 @@ class BedTrack(AnnotationTrack):
                                 end_loc - 1 if end_loc <= end else visible_end,
                             ),
                             (-1 * real_active_line, -1 * real_active_line),
-                            color=self._line_color,
+                            color=self.line_color,
                             linewidth=self.line_width,
                             clip_on=True,
                         )
@@ -412,7 +359,7 @@ class BedTrack(AnnotationTrack):
                             pos = np.arange(
                                 visible_start + self._small_relative,
                                 visible_end + self._small_relative,
-                                int(self._arrow_interval * self._small_relative),
+                                int(self.arrow_interval * self._small_relative),
                             )
                             for xpos in pos:
                                 self._plot_gene_direction(
@@ -447,11 +394,11 @@ class BedTrack(AnnotationTrack):
                                             xy=(
                                                 x,
                                                 -1 * real_active_line
-                                                - (self._patch_height / 4),
+                                                - (self.patch_height / 4),
                                             ),
                                             width=begin_of_thickness,
                                             clip_on=True,
-                                            height=self._patch_height / 2,
+                                            height=self.patch_height / 2,
                                         )
                                         patches.append(p)
                                         # the thick part is larger than the current block
@@ -465,11 +412,11 @@ class BedTrack(AnnotationTrack):
                                                     xy=(
                                                         x + begin_of_thickness,
                                                         -1 * real_active_line
-                                                        - (self._patch_height / 2),
+                                                        - (self.patch_height / 2),
                                                     ),
                                                     width=remaining_length,
                                                     clip_on=True,
-                                                    height=self._patch_height,
+                                                    height=self.patch_height,
                                                 )
                                                 patches.append(p)
                                         else:
@@ -477,14 +424,14 @@ class BedTrack(AnnotationTrack):
                                                 xy=(
                                                     x + begin_of_thickness,
                                                     -1 * real_active_line
-                                                    - (self._patch_height / 2),
+                                                    - (self.patch_height / 2),
                                                 ),
                                                 width=max(
                                                     thick_end - x - begin_of_thickness,
                                                     0,
                                                 ),
                                                 clip_on=True,
-                                                height=self._patch_height,
+                                                height=self.patch_height,
                                             )
                                             patches.append(p)
                                             # remaining part
@@ -492,11 +439,11 @@ class BedTrack(AnnotationTrack):
                                                 xy=(
                                                     thick_end,
                                                     -1 * real_active_line
-                                                    - (self._patch_height / 4),
+                                                    - (self.patch_height / 4),
                                                 ),
                                                 width=max(x + size - thick_end, 0),
                                                 clip_on=True,
-                                                height=self._patch_height / 2,
+                                                height=self.patch_height / 2,
                                             )
                                             patches.append(p)
                                     elif x < thick_end:
@@ -505,11 +452,11 @@ class BedTrack(AnnotationTrack):
                                                 xy=(
                                                     x,
                                                     -1 * real_active_line
-                                                    - (self._patch_height / 2),
+                                                    - (self.patch_height / 2),
                                                 ),
                                                 width=adjusted_size,
                                                 clip_on=True,
-                                                height=self._patch_height,
+                                                height=self.patch_height,
                                             )
                                             patches.append(p)
                                         else:
@@ -520,13 +467,13 @@ class BedTrack(AnnotationTrack):
                                                     xy=(
                                                         end_of_thickness,
                                                         -1 * real_active_line
-                                                        - (self._patch_height / 4),
+                                                        - (self.patch_height / 4),
                                                     ),
                                                     width=max(
                                                         size - end_of_thickness + x, 0
                                                     ),
                                                     clip_on=True,
-                                                    height=self._patch_height / 2,
+                                                    height=self.patch_height / 2,
                                                 )
                                                 # thicker part
                                                 patches.append(p)
@@ -536,11 +483,11 @@ class BedTrack(AnnotationTrack):
                                                     xy=(
                                                         x,
                                                         -1 * real_active_line
-                                                        - (self._patch_height / 2),
+                                                        - (self.patch_height / 2),
                                                     ),
                                                     width=remaining_length,
                                                     clip_on=True,
-                                                    height=self._patch_height,
+                                                    height=self.patch_height,
                                                 )
                                                 patches.append(p)
                                     else:
@@ -548,11 +495,11 @@ class BedTrack(AnnotationTrack):
                                             xy=(
                                                 x,
                                                 -1 * real_active_line
-                                                - (self._patch_height / 4),
+                                                - (self.patch_height / 4),
                                             ),
                                             width=adjusted_size,
                                             clip_on=True,
-                                            height=self._patch_height / 2,
+                                            height=self.patch_height / 2,
                                         )
                                         patches.append(p)
                                 else:
@@ -560,11 +507,11 @@ class BedTrack(AnnotationTrack):
                                         xy=(
                                             x,
                                             -1 * real_active_line
-                                            - (self._patch_height / 2),
+                                            - (self.patch_height / 2),
                                         ),
                                         width=adjusted_size,
                                         clip_on=True,
-                                        height=self._patch_height,
+                                        height=self.patch_height,
                                     )
                                     patches.append(p)
 
@@ -582,10 +529,10 @@ class BedTrack(AnnotationTrack):
                         rec = Rectangle(
                             xy=(
                                 start_loc,
-                                -1 * real_active_line - self._patch_height / 2,
+                                -1 * real_active_line - self.patch_height / 2,
                             ),
                             width=end_loc - start_loc,
-                            height=self._patch_height,
+                            height=self.patch_height,
                             edgecolor=self.edge_color,
                             facecolor=color,
                             linewidth=self.block_line_height,
@@ -650,7 +597,7 @@ class BedTrack(AnnotationTrack):
                 self._ax.plot(
                     (start, start + 1),
                     (-1 * real_active_line, -1 * real_active_line),
-                    color=self._line_color,
+                    color=self.line_color,
                     linewidth=self.line_width,
                     alpha=0,
                     clip_on=True,
@@ -669,50 +616,57 @@ class BedTrack(AnnotationTrack):
 
 
 class BedPETrack(AnnotationTrack):
-    """
-    If you're looking to visualize genomic interactions like proximity captured by Hi-C,
-    you can utilize the :class:`~pygv.tracks.bed_track.BedPETrack` in PyGV.
+    """Visualize genomic interactions from BEDPE files."""
 
-    Parameters
-    ----------
-    track : str
-        Path to the input BEDPE file. Index from tabix is optional, but
-        when index presents, drawing will be much faster and less memory intensive.
-        Only the first six columns in the file will be used
-        (chromosome, start, and end for the two anchors)
-    kwargs : dict
-        name : str
-            Track name. :attr:`~pygv.tracks.track.Track.name`
-        show_name : bool
-            Show feature names. See :attr:`~pygv.tracks.track.AnnotationTrack.show_name`
-        flip : bool
-            Flip the arcs vertically
-        highlight_links : list or tuple
-            Links to highlight. Each item can be either a BEDPE `name` string or
-            a coordinate tuple/list of
-            `(chromosome, start1, end1, start2, end2)`.
-        highlight_link_color : color_like
-            Color used for highlighted links.
-        highlight_link_alpha : float
-            Alpha used for highlighted links.
-        highlight_link_line_width : float
-            Line width used for highlighted links.
-        More kwargs can be seen here: :class:`~pygv.tracks.track.AnnotationTrack`
+    flip_arc: bool = Field(
+        default=False,
+        kw_only=True,
+        validation_alias=AliasChoices("flip_arc", "flip"),
+        description="Flip the arcs vertically",
+    )
+    highlight_link_color: Color = Field(
+        default="#D62728",
+        kw_only=True,
+        description="Color used for highlighted links",
+    )
+    highlight_link_alpha: float = Field(
+        default=1.0,
+        ge=0,
+        le=1,
+        kw_only=True,
+        description="Alpha used for highlighted links",
+    )
+    highlight_link_line_width: Optional[float] = Field(
+        default=None,
+        kw_only=True,
+        description="Line width used for highlighted links",
+    )
+    highlight_links: Any = Field(
+        default=(),
+        kw_only=True,
+        description=(
+            "Links to highlight. Each item can be a BEDPE name string or a "
+            "coordinate tuple (chromosome, start1, end1, start2, end2)."
+        ),
+    )
 
-    Examples
-    --------
-
-    .. plot:: ../examples/plot_bedpe.py
-    """
+    _bed_file: Optional[str] = PrivateAttr(default=None)
+    _fields: tuple = PrivateAttr(default=())
+    _bed_obj: Any = PrivateAttr(default=None)
+    _BedPERecord: Any = PrivateAttr(default=None)
+    _parser: Any = PrivateAttr(default=None)
+    _highlight_links: set = PrivateAttr(default_factory=set)
 
     def _get(self, chromosome, start, end):
-        pass
+        if self._parser is None:
+            return
+        yield from self._parser(chromosome, start, end)
 
     def _pysam_parser(self, chromosome, start, end):
         import pysam
 
         try:
-            for row in self.bed_obj.fetch(
+            for row in self._bed_obj.fetch(
                 chromosome, start, end, parser=pysam.asTuple()
             ):
                 yield self._BedPERecord._make(row[: len(self._BedPERecord._fields)])
@@ -721,23 +675,22 @@ class BedPETrack(AnnotationTrack):
             return
 
     def _pd_parser(self, chromosome, start, end):
-        for row in self.bed_obj.loc[
+        for row in self._bed_obj.loc[
             np.logical_and(
-                self.bed_obj.chrom1 == chromosome,
-                np.logical_and(self.bed_obj.start1 <= end, self.bed_obj.end1 >= start),
+                self._bed_obj.chrom1 == chromosome,
+                np.logical_and(self._bed_obj.start1 <= end, self._bed_obj.end1 >= start),
             ),
             :,
         ].values:
             yield self._BedPERecord._make(row[: len(self._BedPERecord._fields)])
 
-    def __init__(self, track, **kwargs: Any):
-        super(BedPETrack, self).__init__(track, **kwargs)
-        if not os.path.exists(track):
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        if not os.path.exists(self.track):
             raise ValueError
 
-        # parse bed file
-        self.bed_file = track
-        self.fields = (
+        self._bed_file = self.track
+        self._fields = (
             "chrom1",
             "start1",
             "end1",
@@ -756,44 +709,41 @@ class BedPETrack(AnnotationTrack):
         except ImportError:
             use_pysam = 0
 
-        if use_pysam and track.endswith(".bedpe.gz"):
-            if os.path.exists(track + ".tbi"):
+        if use_pysam and self.track.endswith(".bedpe.gz"):
+            if os.path.exists(self.track + ".tbi"):
                 use_pysam = 1
             else:
                 try:
-                    pysam.tabix_index(track, preset="bed")
+                    pysam.tabix_index(self.track, preset="bed")
                     use_pysam = 1
                 except Exception as e:
                     use_pysam = 0
                     print(e)
-        if use_pysam:
-            self.bed_obj = pysam.TabixFile(track)
-            tmp = pd.read_csv(track, sep="\t", header=None, comment="#", nrows=1)
-            n_fields = tmp.shape[1]
-            self._get = self._pysam_parser
         else:
-            self.bed_obj = pd.read_csv(track, sep="\t", header=None, comment="#")
-            n_fields = min(self.bed_obj.shape[1], len(self.fields))
-            self.bed_obj.columns = self.fields[:n_fields]
-            self._get = self._pd_parser
+            use_pysam = 0
+        if use_pysam:
+            self._bed_obj = pysam.TabixFile(self.track)
+            tmp = pd.read_csv(self.track, sep="\t", header=None, comment="#", nrows=1)
+            n_fields = tmp.shape[1]
+            self._parser = self._pysam_parser
+        else:
+            self._bed_obj = pd.read_csv(
+                self.track, sep="\t", header=None, comment="#"
+            )
+            n_fields = min(self._bed_obj.shape[1], len(self._fields))
+            self._bed_obj.columns = self._fields[:n_fields]
+            self._parser = self._pd_parser
 
-        self._BedPERecord = namedtuple("BedPERecord", self.fields[:n_fields])
-        self.small_relative = 0
+        self._BedPERecord = namedtuple("BedPERecord", self._fields[:n_fields])
+        self._small_relative = 0
 
-        # override defaults
         if self.color is None:
             self.color = "#A1A1A1"
         if self.edge_color is None:
             self.edge_color = "#6E6E6E"
-
-        self.flip_arc = kwargs.get("flip", False)
-        self._highlight_links = set()
-        self._highlight_link_color = kwargs.get("highlight_link_color", "#D62728")
-        self._highlight_link_alpha = kwargs.get("highlight_link_alpha", 1.0)
-        self._highlight_link_line_width = kwargs.get(
-            "highlight_link_line_width", self.line_width * 1.5
-        )
-        self.set_highlight_links(kwargs.get("highlight_links", ()))
+        if self.highlight_link_line_width is None:
+            self.highlight_link_line_width = self.line_width * 1.5
+        self.set_highlight_links(self.highlight_links)
 
     @staticmethod
     def _normalize_link_coords(start1, end1, start2, end2, chromosome=None):
@@ -902,7 +852,7 @@ class BedPETrack(AnnotationTrack):
             visible_start = max(start_loc, start)
             visible_end = min(end_loc, end)
 
-            if self._hide_visual_dup:
+            if self.hide_visual_dup:
                 k = (visible_start, visible_end, interval.strand)
                 if k in added:
                     continue
@@ -962,10 +912,10 @@ class BedPETrack(AnnotationTrack):
                 a2_start_loc,
                 a2_end_loc,
             )
-            plot_color = self._highlight_link_color if is_highlight else self.color
-            plot_alpha = self._highlight_link_alpha if is_highlight else self.alpha
+            plot_color = self.highlight_link_color if is_highlight else self.color
+            plot_alpha = self.highlight_link_alpha if is_highlight else self.alpha
             plot_line_width = (
-                self._highlight_link_line_width if is_highlight else self.line_width
+                self.highlight_link_line_width if is_highlight else self.line_width
             )
             a2_mid = (a2_end_loc + a2_start_loc) / 2
             a1_mid = (a1_end_loc + a1_start_loc) / 2
@@ -1017,62 +967,29 @@ class BedPETrack(AnnotationTrack):
 
 
 class ConnectionArcTrack(BedTrack):
-    """
-    Similar to :class:`~pygv.tracks.bed_track.BedPETrack`, :class:`~pygv.tracks.bed_track.ConnectionArcTrack`
-    can be used to visualize genomic interactions like enhancer-promoter interaction.
-    The main difference between these two tracks is that :class:`~pygv.tracks.bed_track.ConnectionArcTrack`
-    draws a directed arrow from the source to the target.
+    """Directed arcs from source to target (BED-like input)."""
 
-    Parameters
-    ----------
-    track : str
-        Path to the input BEDPE file. Index from tabix is optional, but
-        when index presents, drawing will be much faster and less memory intensive.
-        Only the first six columns in the file will be used
-        (chromosome, start, and end for the two anchors)
-    kwargs : dict
-        name : str
-            Track name. :attr:`~pygv.tracks.track.Track.name`
-        show_name : bool
-            Show feature names. See :attr:`~pygv.tracks.track.AnnotationTrack.show_name`
-        flip : bool
-            Flip the arcs vertically
-        More kwargs can be seen here: :class:`~pygv.tracks.track.AnnotationTrack`
-
-    Examples
-    --------
-
-    .. plot:: ../examples/plot_bedpe.py
-    """
-
-    def __init__(self, track, **kwargs):
-        super(ConnectionArcTrack, self).__init__(track=track, **kwargs)
-        if self.color is None:
-            self.color = "#FFD900"
-        if self.edge_color is None:
-            self.edge_color = "#FFBD00"
-
-        if not os.path.exists(track):
-            raise IOError("File not found: {}".format(track))
-
-        self.flip_arc = kwargs.get("flip", False)
+    color: Color = Field(default="#FFD900", kw_only=True)
+    edge_color: Color = Field(default="#FFBD00", kw_only=True)
+    flip_arc: bool = Field(
+        default=False,
+        kw_only=True,
+        validation_alias=AliasChoices("flip_arc", "flip"),
+        description="Flip the arcs vertically",
+    )
+    arrow_style: str = Field(
+        default="->", kw_only=True, description="Matplotlib arrow style"
+    )
+    connection_style: Optional[str] = Field(
+        default=None,
+        kw_only=True,
+        description="Matplotlib connection style; default is an arc using `rad`",
+    )
+    rad: float = Field(
+        default=0.2, kw_only=True, description="Arc radius used when connection_style is None"
+    )
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
-        """
-        Build non-overlapping tracks
-
-        Parameters
-        ----------
-        chromosome : str
-            Chromosome
-        start : int
-            start of visible window
-        end : int
-            end of visible window
-        Returns
-        -------
-
-        """
         pass
 
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
@@ -1094,9 +1011,9 @@ class ConnectionArcTrack(BedTrack):
         super(ConnectionArcTrack, self)._draw_track(
             chromosome=chromosome, start=start, end=end, ax=ax, index=index, **kwargs
         )
-        arrow_style = kwargs.pop("arrow_style", "->")
-        connection_style = kwargs.pop("connection_style", None)
-        rad = kwargs.pop("rad", 0.2)
+        arrow_style = self.arrow_style
+        connection_style = self.connection_style
+        rad = self.rad
         starts = []
         ends = []
         for interval in self._get(chromosome=chromosome, start=start, end=end):
@@ -1117,7 +1034,7 @@ class ConnectionArcTrack(BedTrack):
                             "",
                             xy=(target_start, 0),
                             xycoords="data",
-                            xytext=(anchor_mid, self._height),
+                            xytext=(anchor_mid, self.height),
                             textcoords="data",
                             arrowprops=dict(
                                 arrowstyle=arrow_style,
@@ -1135,7 +1052,7 @@ class ConnectionArcTrack(BedTrack):
                             "",
                             xy=(target_end, 0),
                             xycoords="data",
-                            xytext=(anchor_mid, self._height),
+                            xytext=(anchor_mid, self.height),
                             textcoords="data",
                             arrowprops=dict(
                                 arrowstyle=arrow_style,
@@ -1150,9 +1067,9 @@ class ConnectionArcTrack(BedTrack):
                     width=anchor_end - anchor_start,
                     edgecolor=self.edge_color,
                     clip_on=False,
-                    height=self._height,
+                    height=self.height,
                     facecolor=self.color,
-                    alpha=self._alpha,
+                    alpha=self.alpha,
                     linewidth=self.line_width,
                     zorder=100,
                 )
