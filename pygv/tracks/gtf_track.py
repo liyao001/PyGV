@@ -2,58 +2,65 @@ import math
 import os
 import re
 from collections import OrderedDict, namedtuple
-from typing import ClassVar
+from typing import Any, Optional
+
 import numpy as np
 from matplotlib.collections import PatchCollection
 from matplotlib.patches import Rectangle
-from pydantic import Field, field_validator
+from pydantic import Field, PrivateAttr
 
 from .bed_track import _LaneRegistry
-from .track import AnnotationTrack, AnnotationTrackConfig
+from .track import AnnotationTrack
+from .types import FilterFn
 
 
-class GtfTrackConfig(AnnotationTrackConfig):
-    filters: object = Field(
-        default=None, description="Optional callable used to filter GTF records before plotting."
+class GtfTrack(AnnotationTrack):
+    """GTF annotation track."""
+
+    filters: FilterFn = Field(
+        default=None,
+        description="Callable returning True/False to keep/discard GTF records",
     )
     show_genes: bool = Field(
-        default=False, description="Whether to draw gene-level features in addition to transcripts."
+        default=False,
+        description="Whether to display gene-level features in addition to transcripts",
     )
-    annotation_formatter: object = Field(
-        default=None, description="Optional callable used to format annotation labels."
+    annotation_formatter: Any = Field(
+        default=None,
+        description="Callable used to format gene/transcript labels",
     )
     show_transcript_id: bool = Field(
-        default=False, description="Whether to use transcript IDs in annotation labels."
+        default=False,
+        kw_only=True,
+        description="Show transcript IDs instead of gene names when available",
     )
 
-    @field_validator("filters", "annotation_formatter")
-    def _validate_optional_callable(cls, value):
-        if value is None or callable(value):
-            return value
-        raise ValueError("filters and annotation_formatter must be None or callable")
+    _gtf_file: Optional[str] = PrivateAttr(default=None)
+    _fields: tuple = PrivateAttr(default=())
+    _gtf_obj: Any = PrivateAttr(default=None)
+    _GtfRecord: Any = PrivateAttr(default=None)
+    _parser: Any = PrivateAttr(default=None)
 
-
-class GtfTrack(AnnotationTrack, GtfTrackConfig):
-    """
-    Gtf track
-
-    Parameters
-    ----------
-    track : str
-    kwargs : dict
-        The same as :class:`pygv.tracks.track.AnnotationTrack`
-
-    """
-
-    _FIELD_PRIVATE_ATTRS: ClassVar[dict] = {
-        **AnnotationTrack._FIELD_PRIVATE_ATTRS,
-        "filters": "_filters",
-        "show_genes": "show_gene",
-        "show_transcript_id": "_show_transcript_id",
-    }
+    def __init__(
+        self,
+        track: str,
+        filters: FilterFn = None,
+        show_genes: bool = False,
+        annotation_formatter: Any = None,
+        **data: Any,
+    ) -> None:
+        super().__init__(
+            track=track,
+            filters=filters,
+            show_genes=show_genes,
+            annotation_formatter=annotation_formatter,
+            **data,
+        )
 
     def _get(self, chromosome, start, end):
-        pass
+        if self._parser is None:
+            return
+        yield from self._parser(chromosome, start, end)
 
     def _pysam_parser(self, chromosome, start, end):
         import pysam
@@ -65,12 +72,12 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                 self._gtf_obj.fetch(chromosome, start, end, parser=pysam.asGTF())
             ):
                 if hit.feature == "transcript" or (
-                    self.show_gene and hit.feature == "gene"
+                    self.show_genes and hit.feature == "gene"
                 ):
-                    if self._filters is not None:
+                    if self.filters is not None:
                         if hit.feature == "gene":
                             hit.transcript_id = hit.gene_id
-                        if not self._filters(hit):
+                        if not self.filters(hit):
                             continue
                     if hit.feature == "gene":
                         k = f"{hit.gene_id}|0"
@@ -109,15 +116,15 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         raw_hits[k]["transcript_id"] = hit.transcript_id
                         raw_hits[k]["gene_id"] = (hit.gene_id,)
                 elif hit.feature == "exon":
-                    if self._filters is not None:
-                        if not self._filters(hit):
+                    if self.filters is not None:
+                        if not self.filters(hit):
                             continue
                     k = f"{hit.gene_id}|{hit.transcript_id}"
                     if k in raw_hits:
                         raw_hits[k]["exons"].append((hit.start, hit.end))
                     else:
                         raw_hits[k] = {"exons": [(hit.start, hit.end)]}
-            if self.show_gene:
+            if self.show_genes:
                 # order by: gene ID, gene or transcript, segment length, start position
                 sorted_keys = sorted(
                     raw_hits,
@@ -141,24 +148,73 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
             return
 
     def _pd_parser(self, chromosome, start, end):
-        raise NotImplementedError
+        df = self._gtf_obj
+        if df is None or len(df) == 0:
+            return
+        window = df[
+            (df["seqname"] == chromosome)
+            & (df["start"] <= end)
+            & (df["end"] > start)
+        ]
+        raw_hits = {}
+        regex = r"(.*?)\s\"(.*?)\";"
+        for row in window.itertuples(index=False):
+            attributes = {}
+            for match in re.finditer(regex, str(row.attribute), re.MULTILINE):
+                key, value = match.groups()
+                attributes[key.strip()] = value
+            gene_id = attributes.get("gene_id", "")
+            transcript_id = attributes.get("transcript_id", "")
+            start0 = int(row.start) - 1
+            end0 = int(row.end)
+            if row.feature == "transcript" or (
+                self.show_genes and row.feature == "gene"
+            ):
+                if self.filters is not None and not self.filters(row):
+                    continue
+                k = (
+                    f"{gene_id}|0"
+                    if row.feature == "gene"
+                    else f"{gene_id}|{transcript_id}"
+                )
+                exons = list(raw_hits.get(k, {}).get("exons", []))
+                raw_hits[k] = {
+                    "contig": row.seqname,
+                    "feature": row.feature,
+                    "doc_source": row.source,
+                    "start": start0,
+                    "end": end0,
+                    "score": row.score,
+                    "strand": row.strand,
+                    "frame": row.frame,
+                    "attributes": attributes,
+                    "transcript_id": transcript_id,
+                    "gene_id": gene_id,
+                    "exons": exons,
+                }
+            elif row.feature == "exon":
+                if self.filters is not None and not self.filters(row):
+                    continue
+                k = f"{gene_id}|{transcript_id}"
+                if k in raw_hits:
+                    raw_hits[k]["exons"].append((start0, end0))
+                else:
+                    raw_hits[k] = {"exons": [(start0, end0)]}
+        for transcript in raw_hits.values():
+            if "contig" not in transcript:
+                continue
+            try:
+                yield self._GtfRecord(**transcript)
+            except Exception as e:
+                print(e)
 
-    def __init__(
-        self, track, filters=None, show_genes=False, annotation_formatter=None, **kwargs
-    ):
-        config = GtfTrackConfig(
-            filters=filters,
-            show_genes=show_genes,
-            annotation_formatter=annotation_formatter,
-            **kwargs,
-        )
-        super(GtfTrack, self).__init__(track, **kwargs)
-        if not os.path.exists(track) and not track.startswith("http"):
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        if not os.path.exists(self.track) and not self.track.startswith("http"):
             raise ValueError
 
-        # parse gtf file
-        self.gtf_file = track
-        self.fields = (
+        self._gtf_file = self.track
+        self._fields = (
             "contig",
             "feature",
             "doc_source",
@@ -178,63 +234,49 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
         except ImportError:
             use_pysam = 0
 
-        if use_pysam and track.endswith(".gtf.gz"):
-            if os.path.exists(track + ".tbi"):
+        if use_pysam and self.track.endswith(".gtf.gz"):
+            if os.path.exists(self.track + ".tbi"):
                 use_pysam = 1
-            elif track.startswith("http"):
+            elif self.track.startswith("http"):
                 use_pysam = 1
             else:
                 try:
-                    pysam.tabix_index(track)
+                    pysam.tabix_index(self.track)
                     use_pysam = 1
                 except Exception as e:
                     use_pysam = 0
-                    print("Failed to index gtf file", track, e)
+                    print("Failed to index gtf file", self.track, e)
+        else:
+            use_pysam = 0
         if use_pysam:
-            self._gtf_obj = pysam.TabixFile(track)
-            self._get = self._pysam_parser
+            self._gtf_obj = pysam.TabixFile(self.track)
+            self._parser = self._pysam_parser
         else:
-            # self._gtf_obj = parse_gtf(track)
-            self._get = self._pd_parser
+            import pandas as pd
 
-        self._GtfRecord = namedtuple("GtfRecord", self.fields)
+            self._gtf_obj = pd.read_csv(
+                self.track,
+                sep="\t",
+                header=None,
+                comment="#",
+                names=[
+                    "seqname",
+                    "source",
+                    "feature",
+                    "start",
+                    "end",
+                    "score",
+                    "strand",
+                    "frame",
+                    "attribute",
+                ],
+            )
+            self._parser = self._pd_parser
 
+        self._GtfRecord = namedtuple("GtfRecord", self._fields)
         self._plot_block = 1
-        self._filters = None
-        self.filters = config.filters
-        self.show_gene = config.show_genes
-        self._show_transcript_id = True
-        self.show_transcript_id = config.show_transcript_id
-        if config.annotation_formatter is None:
-            # default: echo
+        if self.annotation_formatter is None or not callable(self.annotation_formatter):
             self.annotation_formatter = lambda x: x
-        else:
-            self.annotation_formatter = config.annotation_formatter
-
-    @property
-    def filters(self):
-        """
-        Filters, a callable object which returns True/False to keep/discard gtf records. Set as None to disable this function.
-        """
-        return self._filters
-
-    @filters.setter
-    def filters(self, value):
-        if value is None or callable(value):
-            self._filters = value
-        else:
-            print("Invalid filter")
-
-    @property
-    def show_transcript_id(self):
-        """
-        Filters, a callable object which returns True/False to keep/discard gtf records. Set as None to disable this function.
-        """
-        return self._show_transcript_id
-
-    @show_transcript_id.setter
-    def show_transcript_id(self, value):
-        self._show_transcript_id = bool(value)
 
     def _pre_plot_hook(self, chromosome, start, end, **kwargs):
         """
@@ -279,7 +321,7 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                     lr.features.append(interval)
                     break
                 else:
-                    if lr.max_coord < start_loc - self._padding_left:
+                    if lr.max_coord < start_loc - self.padding_left:
                         active_lane = lr.offset
                         lr.min_coord = min(lr.min_coord, start_loc)
                         lr.max_coord = max(lr.max_coord, end_loc)
@@ -303,20 +345,10 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                     )
                 )
 
-        if self._plot_block:
-            n = len(self._lane_registries)
-            units = math.ceil(n / self._features_per_lane)
-            units = units if units >= 1 else 1
-            self._height = max(1, units)
-
     def _draw_track(self, chromosome, start, end, ax, index=1, **kwargs):
         super(GtfTrack, self)._draw_track(
             chromosome=chromosome, start=start, end=end, ax=ax, index=index, **kwargs
         )
-        import matplotlib.pyplot as plt
-
-        fig = plt.gcf()
-        bbox = self._ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
         self._ax.set_xlim((start, end))
 
         self._small_relative = 0.004 * (end - start)
@@ -328,16 +360,16 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                 visible_end = min(end_loc, end)
                 active_lane = lane.offset
 
-                real_active_line = (self._patch_height + self._lane_space) * active_lane
+                real_active_line = (self.patch_height + self.lane_space) * active_lane
 
                 if not self._plot_block:
                     rec = Rectangle(
                         xy=(
                             start_loc,
-                            -1 * real_active_line - (self._patch_height / 2),
+                            -1 * real_active_line - (self.patch_height / 2),
                         ),
                         width=end_loc - start_loc,
-                        height=self._patch_height,
+                        height=self.patch_height,
                         facecolor=self.color,
                         linewidth=self.line_width,
                     )
@@ -358,7 +390,7 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                                 end_loc - 1 if end_loc <= end else visible_end,
                             ),
                             (-1 * real_active_line, -1 * real_active_line),
-                            color=self._line_color,
+                            color=self.line_color,
                             linewidth=self.line_width,
                             clip_on=True,
                         )
@@ -368,7 +400,7 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                             pos = np.arange(
                                 visible_start + self._small_relative,
                                 visible_end + self._small_relative,
-                                int(self._arrow_interval * self._small_relative),
+                                int(self.arrow_interval * self._small_relative),
                             )
                             for xpos in pos:
                                 self._plot_gene_direction(
@@ -387,18 +419,18 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                                     xy=(
                                         s,
                                         -1 * real_active_line
-                                        - (self._patch_height / 2),
+                                        - (self.patch_height / 2),
                                     ),
                                     width=adjusted_size,
                                     clip_on=True,
-                                    height=self._patch_height,
+                                    height=self.patch_height,
                                 )
                                 patches.append(p)
 
                         self._ax.add_collection(
                             PatchCollection(
                                 patches,
-                                edgecolors=self._edge_color,
+                                edgecolors=self.edge_color,
                                 facecolors=self.color,
                                 linewidths=self.line_width,
                                 zorder=100,
@@ -409,11 +441,11 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         rec = Rectangle(
                             xy=(
                                 start_loc,
-                                -1 * real_active_line - self._patch_height / 2,
+                                -1 * real_active_line - self.patch_height / 2,
                             ),
                             width=end_loc - start_loc,
-                            height=self._patch_height,
-                            edgecolor=self._edge_color,
+                            height=self.patch_height,
+                            edgecolor=self.edge_color,
                             facecolor=self.color,
                             linewidth=self.line_width,
                             **kwargs,
@@ -430,8 +462,8 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         self._ax.text(
                             x=start_loc - self._small_relative,
                             y=-1 * real_active_line,
-                            color=self._font_color,
-                            size=self._font_size,
+                            color=self.font_color,
+                            size=self.font_size,
                             s=self.annotation_formatter(
                                 interval.attributes["transcript_id"]
                                 if cond_b
@@ -446,8 +478,8 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         self._ax.text(
                             x=end_loc + self._small_relative,
                             y=-1 * real_active_line,
-                            color=self._font_color,
-                            size=self._font_size,
+                            color=self.font_color,
+                            size=self.font_size,
                             s=self.annotation_formatter(
                                 interval.attributes["transcript_id"]
                                 if cond_b
@@ -462,8 +494,8 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                         self._ax.text(
                             x=(visible_end + visible_start) / 2,
                             y=-1 * real_active_line,
-                            color=self._font_color,
-                            size=self._font_size,
+                            color=self.font_color,
+                            size=self.font_size,
                             s=self.annotation_formatter(
                                 interval.attributes["transcript_id"]
                                 if cond_b
@@ -475,7 +507,7 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
                             bbox=dict(
                                 boxstyle="round",
                                 fc="w",
-                                alpha=self._font_box_alpha,
+                                alpha=self.font_box_alpha,
                                 lw=0.1,
                             ),
                             zorder=101,
@@ -487,19 +519,19 @@ class GtfTrack(AnnotationTrack, GtfTrackConfig):
 
         if self._plot_block:
             n = len(self._lane_registries)
-            units = math.ceil(n / self._features_per_lane)
+            units = math.ceil(n / self.features_per_lane)
             units = units if units >= 1 else 1
-            ylim_lower = -(self._patch_height + self._lane_space) * len(
+            ylim_lower = -(self.patch_height + self.lane_space) * len(
                 self._lane_registries
             )
             aesthetic_lower = (
-                -(self._patch_height + self._lane_space)
-                * self._features_per_lane
+                -(self.patch_height + self.lane_space)
+                * self.features_per_lane
                 * units
             )
             ylim_lower = ylim_lower if ylim_lower < aesthetic_lower else aesthetic_lower
 
-            self._ax.set_ylim((ylim_lower, self._patch_height / 2 + 0.05))
+            self._ax.set_ylim((ylim_lower, self.patch_height / 2 + 0.05))
         else:
             n = len(self._lane_registries)
             self._ax.set_ylim((-1.5, 1.5))
