@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: dev
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master') }}
+
+      - name: Ruff
+        run: pixi run -e dev lint
+
+      - name: Typos
+        run: pixi run -e dev typos
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: dev
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master') }}
+
+      - name: Pytest
+        run: pixi run -e dev test
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: prefix-dev/setup-pixi@v0.10.0
+        with:
+          environments: dev
+          cache: true
+          cache-write: ${{ github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master') }}
+
+      - name: Build sdist and wheel
+        run: pixi run -e dev build
+
+      - name: Check distribution metadata
+        run: pixi run -e dev check-dist
