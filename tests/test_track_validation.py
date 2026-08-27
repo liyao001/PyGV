@@ -102,24 +102,3 @@ def test_dual_axis_layout_height():
     assert dual.layout_height() == 3
     assert dual.left_track is left
     assert dual.right_track is right
-
-
-def test_paired_strandless_accepts_pos_neg_color(monkeypatch):
-    from pygv.tracks import bigwig_track
-
-    class _FakeBw:
-        def values(self, *args, **kwargs):
-            return None
-
-    monkeypatch.setattr(bigwig_track, "check_accessibility", lambda *a, **k: None)
-    monkeypatch.setattr(bigwig_track.pyBigWig, "open", lambda path: _FakeBw())
-
-    track = bigwig_track.PairedStrandlessTrack(
-        "pl.bw",
-        "mn.bw",
-        pos_color="#ee6352",
-        neg_color="#0077b6",
-    )
-    assert track.pos_color == "#ee6352"
-    assert track.neg_color == "#0077b6"
-    assert track.color == "#ee6352"

@@ -392,12 +392,7 @@ class PairedStrandSpecificTracks(PairedStrandSpecificTrack):
 
 
 class PairedStrandlessTrack(BigWigTrack):
-    """Paired strandless tracks (plus and minus signals summed as positive).
-
-    ``pos_color`` is an alias for ``color``. ``neg_color`` is accepted for
-    compatibility with :class:`PairedStrandSpecificTrack` but is not drawn,
-    because the two strands are summed into one series.
-    """
+    """Paired strandless tracks (plus and minus signals summed as positive)."""
 
     track: Union[str, List[str]] = Field(default="", kw_only=True)
     pl_track: Union[str, List[str]] = Field(
@@ -405,19 +400,6 @@ class PairedStrandlessTrack(BigWigTrack):
     )
     mn_track: Union[str, List[str]] = Field(
         description="File path(s) or url(s) for the negative track"
-    )
-    pos_color: Optional[Color] = Field(
-        default=None,
-        kw_only=True,
-        description="Color for the summed strandless signal; alias for color",
-    )
-    neg_color: Optional[Color] = Field(
-        default=None,
-        kw_only=True,
-        description=(
-            "Accepted for compatibility with PairedStrandSpecificTrack. "
-            "Not drawn: plus and minus signals are summed into one series."
-        ),
     )
 
     _pl_bw: list = PrivateAttr(default_factory=list)
@@ -436,12 +418,9 @@ class PairedStrandlessTrack(BigWigTrack):
     @model_validator(mode="before")
     @classmethod
     def _fill_track_from_pl(cls, data):
-        if isinstance(data, dict):
+        if isinstance(data, dict) and not data.get("track"):
             data = dict(data)
-            if not data.get("track"):
-                data["track"] = data.get("pl_track") or ""
-            if data.get("pos_color") is not None and "color" not in data:
-                data["color"] = data["pos_color"]
+            data["track"] = data.get("pl_track") or ""
         return data
 
     def model_post_init(self, __context: Any) -> None:
