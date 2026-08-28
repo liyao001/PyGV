@@ -17,6 +17,24 @@ from datetime import date
 _repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, _repo_root)
 
+
+def _package_release() -> str:
+    """GenomeViewer version from hatch-vcs, then the installed dist metadata."""
+    try:
+        from pygv import __version__
+
+        if __version__ and __version__ != "0.0.0":
+            return __version__
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import version as pkg_version
+
+        return pkg_version("GenomeViewer")
+    except Exception:
+        return "0.0.0"
+
+
 # First publication year for the docs; end year updates on each build (CI, RTD, local).
 _COPYRIGHT_START_YEAR = 2021
 
@@ -25,6 +43,8 @@ _COPYRIGHT_START_YEAR = 2021
 project = 'PyGV'
 copyright = f"{_COPYRIGHT_START_YEAR}-{date.today().year}, Li Yao"
 author = 'Li Yao'
+release = _package_release()
+version = release
 
 # -- General configuration ---------------------------------------------------
 
@@ -74,6 +94,9 @@ sphinx_gallery_conf = {
 plot_formats = [('png', 300), 'pdf']
 html_theme_options = {
     "show_nav_level": 4,
+    "logo": {
+        "text": f"{project} {release}",
+    },
     # "external_links": [
     #     {"name": "Track Gallery", "url": "./auto_examples"},
     # ]
