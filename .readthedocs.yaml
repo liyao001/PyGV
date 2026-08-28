@@ -5,6 +5,11 @@ build:
   os: ubuntu-22.04
   tools:
     python: "3.11"
+  jobs:
+    # hatch-vcs needs full history and tags; RTD clones are shallow by default.
+    post_checkout:
+      - git fetch --unshallow || true
+      - git fetch --tags --force
 
 sphinx:
   configuration: doc_source/conf.py
