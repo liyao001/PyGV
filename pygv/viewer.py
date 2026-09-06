@@ -68,11 +68,7 @@ class GenomeViewer(object):
         if font_size is not None:
             mpl.pyplot.rcParams["font.size"] = font_size
 
-        self.alternative_colors = []
-        if alternative_color_map is not None and type(alternative_color_map) is str:
-            self.alternative_colors = matplotlib.cm.get_cmap(
-                alternative_color_map
-            ).colors
+        self._axs = None
 
         self._plot_chrom = None
         self._plot_start = None
