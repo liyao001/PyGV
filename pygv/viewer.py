@@ -871,14 +871,16 @@ class GenomeViewer(object):
         """
         for index, track in enumerate(self._registered_tracks):
             sax = axs[index]
+            draw_kwargs = dict(kwargs)
+            n_ticks = draw_kwargs.pop("n_ticks", self._n_ticks)
             track._draw_track(
                 chromosome=chromosome,
                 start=start,
                 end=end,
                 ax=sax,
                 index=index,
-                n_ticks=self._n_ticks,
-                **kwargs,
+                n_ticks=n_ticks,
+                **draw_kwargs,
             )
             track._post_plot_hook(chromosome, start, end, ax=sax, index=index, **kwargs)
 
