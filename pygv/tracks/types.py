@@ -10,6 +10,7 @@ from pydantic import AfterValidator, Field
 ShowMode = Literal["expanded", "collapsed"]
 PlotType = Literal["line", "bar"]
 StackOrder = Literal["big_on_top", "small_on_top", "fixed"]
+MotifStrand = Literal["+", "-", "both"]
 ColorReadsBy = Literal[
     "insert size",
     "pair orientation",
