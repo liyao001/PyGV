@@ -16,5 +16,7 @@ htmlcov/
 .tox/
 .nox/
 pygv/_version.py
+*.fai
+*.fa.fai
 doc_source/auto_examples/**
 pygv/Untitled
