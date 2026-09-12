@@ -148,7 +148,7 @@ class CoverageTrack(_GenericNumericalBamTrack):
             y_new, x_new, _ = binned_statistic(
                 xvalues, values, statistic=self.stat_method, bins=self.n_bins
             )
-            xvalues = x_new
+            xvalues = x_new[:-1]
             values = y_new
         keep_idx = self._merge_redundant_values(xvalues, values)
         return xvalues[keep_idx], values[keep_idx]
@@ -550,7 +550,7 @@ class StrandSpecificCoverageTrack(_GenericNumericalBamTrack):
             y_new, x_new, _ = binned_statistic(
                 xvalues, values, statistic=self.stat_method, bins=self.n_bins
             )
-            xvalues = x_new
+            xvalues = x_new[:-1]
             values = y_new
         keep_idx = self._merge_redundant_values(xvalues, values)
         return xvalues[keep_idx], values[keep_idx]

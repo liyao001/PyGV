@@ -18,6 +18,7 @@ from .bigwig_track import (
 )
 from .gtf_track import GtfTrack
 from .logo_track import DynseqTrack, LogoTrack
+from .motif_track import MotifHit, MotifTrack
 from .track import (
     AnnotationTrack,
     DualAxisTrack,
@@ -50,4 +51,6 @@ __all__ = [
     "GtfTrack",
     "LogoTrack",
     "DynseqTrack",
+    "MotifTrack",
+    "MotifHit",
 ]
