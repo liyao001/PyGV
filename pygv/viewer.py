@@ -68,11 +68,7 @@ class GenomeViewer(object):
         if font_size is not None:
             mpl.pyplot.rcParams["font.size"] = font_size
 
-        self.alternative_colors = []
-        if alternative_color_map is not None and type(alternative_color_map) is str:
-            self.alternative_colors = matplotlib.cm.get_cmap(
-                alternative_color_map
-            ).colors
+        self._axs = None
 
         self._plot_chrom = None
         self._plot_start = None
@@ -875,14 +871,16 @@ class GenomeViewer(object):
         """
         for index, track in enumerate(self._registered_tracks):
             sax = axs[index]
+            draw_kwargs = dict(kwargs)
+            n_ticks = draw_kwargs.pop("n_ticks", self._n_ticks)
             track._draw_track(
                 chromosome=chromosome,
                 start=start,
                 end=end,
                 ax=sax,
                 index=index,
-                n_ticks=self._n_ticks,
-                **kwargs,
+                n_ticks=n_ticks,
+                **draw_kwargs,
             )
             track._post_plot_hook(chromosome, start, end, ax=sax, index=index, **kwargs)
 

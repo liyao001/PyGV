@@ -20,6 +20,11 @@ Pydantic models for track constructors, hatch-vcs packaging, and pixi-based CI.
   instead of being ignored.
 - File handles such as `.bam` / `.bw` are private (`_bam`, `_bw`).
 
+### Added
+
+- `MotifTrack` searches a reference FASTA for nucleotide, IUPAC, or regex
+  motifs and draws stranded hits like IGV's Motif Finder.
+
 ### Fixed
 
 - Uncompressed `.gtf` / `.bedpe` files are not opened with Tabix when pysam
