@@ -42,20 +42,10 @@ gv2.add_group_label(0, 1, "Group 1")
 gv2.plot("chr1", 201954851, 201955948)
 
 # %%
-# Group labels default to automatic placement so the text and connecting line
-# sit to the left of track names and y-axis tick labels. The same default
-# applies when grouping by track name:
+# Group autoscale can also be created by providing the names of the tracks:
 gv3 = GenomeViewer()
 gv3.add_track(track1)
 gv3.add_track(track2)
 
 gv3.add_group_label_by_name("default", "shrunken", "Group 1")
 gv3.plot("chr1", 201954851, 201955948)
-
-# %%
-# Restore the previous manual coordinates with ``x=0.02, x_line_offset=0.015``:
-gv4 = GenomeViewer()
-gv4.add_track(track1)
-gv4.add_track(track2)
-gv4.add_group_label(0, 1, "Group 1", x=0.02, x_line_offset=0.015)
-gv4.plot("chr1", 201954851, 201955948)

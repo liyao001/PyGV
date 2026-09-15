@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 
 
 @dataclass(frozen=True)
@@ -7,9 +7,7 @@ class GroupLabelConfig:
     start_track_idx: int
     end_track_idx: int
     label: str
-    # None means automatic placement; a number is manual figure coordinates.
-    x: Optional[float] = None
-    # Used only when x is not None.
+    x: float = 0.02
     x_line_offset: float = 0.015
 
     def __post_init__(self):
