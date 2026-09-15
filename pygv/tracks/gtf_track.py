@@ -271,6 +271,7 @@ class GtfTrack(AnnotationTrack):
                     "attribute",
                 ],
             )
+            self._gtf_obj.seqname = self._gtf_obj.seqname.astype(str)
             self._parser = self._pd_parser
 
         self._GtfRecord = namedtuple("GtfRecord", self._fields)
