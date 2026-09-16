@@ -1,7 +1,7 @@
 # Runtime dependencies are declared in pyproject.toml.
 # Install with: pip install -e .   or   pixi install
 numpy
-matplotlib
+matplotlib>=3.6
 seaborn
 pysam
 pandas
