@@ -9,6 +9,11 @@ import numpy as np
 import pygv.tracks
 from pygv import __version__
 from pygv.configs.label import GroupLabelConfig, GroupLabels
+from pygv.group_label_layout import (
+    GroupLabelLayoutEngine,
+    snapshot_subplotpars,
+    wrap_layout_engine,
+)
 
 
 class GenomeViewer(object):
@@ -78,6 +83,7 @@ class GenomeViewer(object):
         self._n_ticks = n_ticks
         self._group_auto_scales = []
         self._group_labels = GroupLabels()
+        self._axs = None
 
     @staticmethod
     def _supported_fonts():
@@ -160,7 +166,7 @@ class GenomeViewer(object):
         if len(tracks) > 0:
             self._group_auto_scales.append(tracks)
 
-    def add_group_label(self, start_track_idx: int, end_track_idx: int, label: str, x=0.02, x_line_offset=0.015):
+    def add_group_label(self, start_track_idx: int, end_track_idx: int, label: str, x=None, x_line_offset=0.015):
         """
         Add group label
 
@@ -172,10 +178,20 @@ class GenomeViewer(object):
             Index of the end track (0-based)
         label : str
             Group label
-        x : float
-            X-position for the label in figure coordinates (default 0.02).
+        x : float or None
+            X-position for the label in figure coordinates. ``None`` (the default)
+            places the label automatically to the left of track names and y-axis
+            tick labels. Pass an explicit number (including ``0``) for manual
+            placement. Manual coordinates are not updated when automatic labels
+            change the left margin; mixing both modes can make a manual label
+            overlap the automatic gutter.
         x_line_offset : float
-            Offset for the line from the label in figure coordinates (default 0.015).
+            Offset for the connecting line relative to *x* in figure coordinates
+            (default 0.015). Used only for manual placement; ignored when
+            ``x`` is ``None``.
+
+            Recover the previous fixed coordinates with
+            ``x=0.02, x_line_offset=0.015``.
 
         Examples
         --------
@@ -183,19 +199,26 @@ class GenomeViewer(object):
         .. plot:: ../examples/plot_group_label.py
         """
         n_total_tracks = len(self._registered_tracks)
-        if end_track_idx >= n_total_tracks:
-            warn(f"End track index {end_track_idx} out of range", RuntimeWarning)
-        else:
-            self._group_labels.add(GroupLabelConfig(
-                start_track_idx=start_track_idx,
-                end_track_idx=end_track_idx,
-                label=label,
-                x=x,
-                x_line_offset=x_line_offset
-            ))
+        if not str(label).strip():
+            warn("Ignoring empty group label", RuntimeWarning)
+            return
+        if start_track_idx >= n_total_tracks or end_track_idx >= n_total_tracks:
+            warn(
+                f"Group label track index out of range "
+                f"({start_track_idx}, {end_track_idx})",
+                RuntimeWarning,
+            )
+            return
+        self._group_labels.add(GroupLabelConfig(
+            start_track_idx=start_track_idx,
+            end_track_idx=end_track_idx,
+            label=label,
+            x=x,
+            x_line_offset=x_line_offset
+        ))
 
     def add_group_label_by_name(
-        self, start_track_name: str, end_track_name: str, label: str, x=0.02, x_line_offset=0.015
+        self, start_track_name: str, end_track_name: str, label: str, x=None, x_line_offset=0.015
     ):
         """
         Add group label by track names
@@ -208,10 +231,18 @@ class GenomeViewer(object):
             Name of the end track
         label : str
             Group label
-        x : float
-            X-position for the label in figure coordinates (default 0.02).
+        x : float or None
+            X-position for the label in figure coordinates. ``None`` (the default)
+            places the label automatically. Pass an explicit number (including
+            ``0``) for manual placement. Manual coordinates are not updated when
+            automatic labels change the left margin.
         x_line_offset : float
-            Offset for the line from the label in figure coordinates (default 0.015).
+            Offset for the connecting line relative to *x* in figure coordinates
+            (default 0.015). Used only for manual placement; ignored when
+            ``x`` is ``None``.
+
+            Recover the previous fixed coordinates with
+            ``x=0.02, x_line_offset=0.015``.
 
         """
         all_track_names = [t.name for t in self._registered_tracks]
@@ -250,8 +281,7 @@ class GenomeViewer(object):
         -------
 
         """
-        if track in self._registered_tracks:
-            self._registered_tracks.remove(track)
+        self._registered_tracks = [t for t in self._registered_tracks if t is not track]
 
     def reset_group_autoscale(self):
         """
@@ -622,7 +652,11 @@ class GenomeViewer(object):
 
     def _plot_group_label(self, fig, axes):
         """
-        Adds a vertical group label and connecting line alongside a group of vertically stacked subplots.
+        Create group-label artists once and install a layout engine to place them.
+
+        Automatic labels (``x=None``) are packed to the left of track names and
+        y-tick labels. Explicit numeric ``x`` values keep the previous manual
+        figure-coordinate formulas.
 
         Parameters:
             fig : matplotlib.figure.Figure
@@ -630,30 +664,35 @@ class GenomeViewer(object):
             axes : list of matplotlib.axes.Axes
                 List of subplot axes, ordered top to bottom.
         """
-        if len(self._group_labels.label_configs) > 0:
-            fig.canvas.draw()  # Needed to update positions
+        configs = self._group_labels.label_configs
+        if len(configs) == 0:
+            return
 
-        for group_config in self._group_labels.label_configs:
-            # Get the bounding boxes of the top and bottom axes
+        n_axes = len(axes)
+        artists = []
+        for group_config in configs:
             start_idx = group_config.start_track_idx
             end_idx = group_config.end_track_idx
-            x = group_config.x
-            x_line_offset = group_config.x_line_offset
-
+            if start_idx < 0 or end_idx >= n_axes or start_idx >= n_axes:
+                continue
+            if not str(group_config.label).strip():
+                continue
             bbox_top = axes[start_idx].get_position()
             bbox_bottom = axes[end_idx].get_position()
-
-            # Y coordinates in figure space
             y_top = bbox_top.y1
             y_bottom = bbox_bottom.y0
-            y_center = (y_top + y_bottom) / 2
-
-            # Match track-name (ylabel) font size and family.
+            y_center = (y_top + y_bottom) / 2.0
             label_font = axes[start_idx].yaxis.label.get_fontproperties()
 
-            # Add vertical label
-            fig.text(
-                x - x_line_offset,
+            if group_config.x is None:
+                text_x = 0.02
+                line_x = 0.03
+            else:
+                text_x = group_config.x - group_config.x_line_offset
+                line_x = group_config.x + group_config.x_line_offset
+
+            text = fig.text(
+                text_x,
                 y_center,
                 group_config.label,
                 va="center",
@@ -661,11 +700,32 @@ class GenomeViewer(object):
                 rotation="vertical",
                 fontproperties=label_font,
             )
+            text._pygv_group_label = True
+            line = mpl.pyplot.Line2D(
+                [line_x, line_x],
+                [y_bottom, y_top],
+                transform=fig.transFigure,
+                color="black",
+                linewidth=1,
+            )
+            line._pygv_group_label = True
+            fig.add_artist(line)
+            artists.append({"config": group_config, "text": text, "line": line})
 
-            # Add vertical line beside the label
-            fig.lines.append(mpl.pyplot.Line2D([x + x_line_offset, x + x_line_offset],
-                                        [y_bottom, y_top],
-                                        transform=fig.transFigure, color="black", linewidth=1))
+        if not artists:
+            return
+
+        inner = wrap_layout_engine(fig.get_layout_engine())
+        fig.set_layout_engine(
+            GroupLabelLayoutEngine(
+                self,
+                axes,
+                artists,
+                inner=inner,
+                base_subplots=snapshot_subplotpars(fig),
+            )
+        )
+        fig.canvas.draw()
 
 
     def show_tracks(self):
@@ -904,10 +964,10 @@ class GenomeViewer(object):
             self._apply_group_autoscale()
 
         fig.align_ylabels()
-        if force_tight_layout is None or not force_tight_layout:
-            fig.set_tight_layout(False)
+        if force_tight_layout:
+            fig.set_layout_engine("tight")
         else:
-            fig.set_tight_layout(True)
+            fig.set_layout_engine("none")
 
     def _apply_group_autoscale(self):
         """

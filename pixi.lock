@@ -2392,7 +2392,7 @@ packages:
 - pypi: ./
   name: genomeviewer
   requires_dist:
-  - matplotlib
+  - matplotlib>=3.6
   - numpy
   - pandas
   - pybigwig
